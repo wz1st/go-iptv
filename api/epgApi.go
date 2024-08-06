@@ -16,6 +16,11 @@ func GetEpg(c *gin.Context) {
 	id := c.DefaultQuery("id", "")
 	simple := c.DefaultQuery("simple", "")
 
-	result := service.GetEpg(id, simple)
-	c.JSON(http.StatusOK, result)
+	if simple != "1" {
+		result := service.GetEpg(id)
+		c.JSON(http.StatusOK, result)
+	} else {
+		result := service.GetSimpleEpg(id)
+		c.JSON(http.StatusOK, result)
+	}
 }

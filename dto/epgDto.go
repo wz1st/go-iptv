@@ -16,3 +16,22 @@ type ZmtProgramme struct {
 	Channel string `xml:"channel,attr"`
 	Title   string `xml:"title"`
 }
+
+type Program struct {
+	Name      string `json:"name"`
+	StartTime string `json:"starttime"`
+}
+
+type Response struct {
+	Code int       `json:"code"`
+	Data []Program `json:"data"`
+	Msg  string    `json:"msg"`
+	Pos  int       `json:"pos"`
+}
+
+type SimpleResponse struct {
+	Code int     `json:"code"`
+	Data Program `json:"data"`
+	Msg  string  `json:"msg"`
+	Pos  int     `json:"pos"`
+}

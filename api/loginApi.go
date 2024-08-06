@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"path/filepath"
 
@@ -26,7 +25,6 @@ func AuthLogin(c *gin.Context) {
 	result.IP = ip
 
 	resObj, _ := json.Marshal(result)
-	fmt.Print(string(resObj))
 	aes := until.NewAes(bootstrap.AES_KEY, "AES-128-ECB", "")
 	reAes, _ := aes.Encrypt(string(resObj))
 
