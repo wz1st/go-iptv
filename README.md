@@ -3,6 +3,16 @@
 ### 环境要求
 - java 1.8
 - go 1.20.x
+### 系统目录
+```
+# tree config
+├── apk    # 编译完成的APK
+│   └── DSMTV.apk
+├── conf.yaml  # 系统配置，需要根据自己的环境修改
+├── images    # 背景图片 默认一个初音
+└── list   # 提供一个list_url访问服务器，地址http://<ip>:<port(非容器默认8080)>/list/，可以把自定义的iptv源放这儿
+    └── cctv.txt
+```
 ### 配置文件
 ```
 config:
@@ -25,9 +35,9 @@ iptv_config:
   qqinfo: 1111   #联系信息
 channels:
   - class: CCTV  # 自己定义
-    list_url: http://192.168.147.139:8080/list/cctv.txt  # 自己定义
+    list_url: http://192.168.147.139:8080/list/cctv.txt  # iptv源  自己定义
   - class: 卫视  # 自己定义
-    list_url: http://192.168.147.139:8080/list/1.txt  # 自己定义
+    list_url: http://192.168.147.139:8080/list/1.txt  # iptv源  自己定义
 ```
 ### 本地运行
 ```
@@ -40,7 +50,7 @@ go run main.go
 
 
 
-list_url格式样例：
+list_url iptv源格式样例：
 ```
 CCTV1,https://live.v1.mk/api/bestv.php?id=cctv1hd8m/8000000
 CCTV2,https://live.v1.mk/api/bestv.php?id=cctv2hd8m/8000000
