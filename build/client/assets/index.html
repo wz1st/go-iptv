@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+    <title>本地视频源管理后台</title>
+    <link href="./bootstrap.min.css" rel="stylesheet">
+    <script src="./jquery.min.js" ></script>
+    <script src="./bootstrap.min.js" ></script>
+    <link href="./toastr.css" rel="stylesheet">
+    <script src="./toastr.js" ></script>
+
+
+</head>
+<body>
+<div class="body_box">
+    <nav class="navbar navbar-default">
+        <div class="container-fluid">
+            <!-- Brand and toggle get grouped for better mobile display -->
+            <div class="navbar-header">
+                <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#bs-example-navbar-collapse-1" aria-expanded="false">
+                    <span class="sr-only">Toggle navigation</span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                </button>
+                <a class="navbar-brand" href="./index.html">本地视频源管理后台</a>
+            </div>
+
+            <!-- Collect the nav links, forms, and other content for toggling -->
+            <div class="collapse navbar-collapse" id="bs-example-navbar-collapse-1">
+                <ul class="nav navbar-nav">
+                    <li class="active"><a href="./index.html">管理后台 <span class="sr-only">(current)</span></a></li>
+                    <li><a href="./bandr.html">备份和还原</a></li>
+                    <li><a href="#">源转换</a></li>
+                    <li><a href="./testurl.html">有效性检测</a></li>
+                </ul>
+            </div><!-- /.navbar-collapse -->
+
+        </div><!-- /.container-fluid -->
+    </nav>
+
+
+    <div class="epg_box">
+        <div class="epg_left">
+            <div class="panel panel-default" >
+                <div class="panel-heading" > EPG接口</div>
+                <ul class="list-group">
+                    <li class="list-group-item">
+                        <button onclick="update_epg()" class="btn btn-primary">保存EPG</button>
+                    </li>
+                </ul>
+            </div>
+
+        </div>
+        <div class="epg_right">
+            <textarea  class="form-control"  placeholder="这里放你的EPG api啦！格式如下.....^_^&#XAhttp://eztv.com/getepg?id={频道名}&#XA注:{频道名}括号不可省略喔！" id="epg_api" cols="30" rows="4"></textarea>
+        </div>
+    </div>
+
+
+
+    <div class="body_left" >
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <button onclick="add_category()" class="btn btn-success">新分类</button>
+            </div>
+            <ul class="list-group channel_list">
+                <!-- <li class="list-group-item">
+                    <span class="badge">0</span>
+                    null
+                </li> -->
+            </ul>
+            <div id="channellistnotice" style="display: none;  padding:50px 0px; font-size: 18px; text-align: center;">正在获取列表...</div>
+        </div>
+    </div>
+
+    <div class="body_right" >
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <div class="input-group input-group-sm">
+                    <input type="text" class="category_name form-control" value="新分类" />
+                    <span class="input-group-btn"><a onclick="save_category()" href="#" type="button" class="btn btn-primary btn-sm">&nbsp;&nbsp;保&nbsp;&nbsp;存
+							</a><a href="#" onclick="del_category()" type="button" class="btn btn-danger btn-sm">&nbsp;&nbsp;删&nbsp;&nbsp;除</a></span>
+                </div>
+            </div>
+        </div>
+        <div class="edit_content">
+            <div>
+                <div class="input-group">
+                    <span class="input-group-addon">排序索引</span>
+                    <input type="text" class="sort_index form-control" value="0" />
+                </div>
+            </div>
+            <textarea class="form-control" placeholder="&#XA这里放你的视屏源链接啦！格式如下.....^_^&#XA&#XA新年快乐,http://happyeveryday.m3u8&#XA开心每一天,http://happyeveryday.m3u8&#XA分享快乐给所有人,http://happyeveryday.m3u8" id="detail_content" name="" id="" ></textarea>
+        </div>
+
+    </div>
+
+
+</div>
+
+</body>
+</html>
+<style>.body_left{float:left;width:30%;min-height:500px;box-shadow:1px 1px 5px rgba(0,0,0,0.2)}.body_box{opacity:0;transition:opacity 1s;min-height:500px;margin:0 15px}.body_right{float:right;width:68%;min-height:500px;box-shadow:1px 1px 5px rgba(0,0,0,0.2)}.edit_content{margin:0 15px 15px}.edit_content textarea{width:100%;min-height:500px}.i_footer{margin-top:230px;text-align:center;min-height:50px}.channel_list li:hover{background-color:#5f8e98;cursor:pointer}.list_active{background-color:#5f8e98}.epg_box{min-height:100px;margin-bottom:20px}.epg_left{float:left;width:30%;min-height:100px;box-shadow:1px 1px 5px rgba(0,0,0,0.2)}.epg_right{float:right;width:68%;min-height:100px;box-shadow:1px 1px 5px rgba(0,0,0,0.2)}
+</style>
+<!-- <script src="./bundle.js"></script> -->
+<script>
+	getJson();
+	getEpg();
+</script>
+
+

@@ -1,0 +1,17 @@
+!!brut.androlib.meta.MetaInfo
+apkFileName: DSMTV.apk
+compressionType: false
+doNotCompress:
+- resources.arsc
+- png
+- res/drawable-hdpi-v4/ic_search.webp
+- ogg
+isFrameworkApk: false
+packageInfo: null
+sdkInfo: null
+sharedLibrary: false
+sparseResources: false
+unknownFiles: {}
+usesFramework: null
+version: 2.5.0
+versionInfo: null
