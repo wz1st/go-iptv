@@ -1,7 +1,6 @@
 ## 矿神群晖iptv的mini版
 使用go重构整个系统架构，占用更小，取消了后台和授权限制，需要编写配置文件，相对来说更需要一点技术      
-```docker run -d --name iptv_server -p <port>:8080 -v /<path>:/config v1st233/iptv:mini```      
-启动后生成配置文件conf.yml，需要修改配置文件后重启     访问```http://<ip>:<port>```即可下载apk
+### 配置文件
 ```
 config:
   build: /build  # 容器启动不可以改
@@ -27,6 +26,15 @@ channels:
   - class: 卫视  # 自己定义
     list_url: http://192.168.147.139:8080/list/1.txt  # 自己定义
 ```
+### 本地运行
+```
+go run main.go
+```
+访问```http://<ip>:8080```即可下载apk
+### docker运行
+```docker run -d --name iptv_server -p <port>:8080 -v /<path>:/config v1st233/iptv:mini```      
+启动后生成配置文件conf.yml，需要修改配置文件后重启     访问```http://<ip>:<port>```即可下载apk
+
 
 
 list_url格式样例(latest版通用)：
