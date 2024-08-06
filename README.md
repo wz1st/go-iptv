@@ -10,7 +10,7 @@
 │   └── DSMTV.apk
 ├── conf.yaml  # 系统配置，需要根据自己的环境修改
 ├── images    # 背景图片 默认一个初音
-└── list   # 提供一个list_url访问服务器，地址http://<ip>:<port(非容器默认8080)>/list/，可以把自定义的iptv源放这儿
+└── list   # 提供一个list_url访问服务器，可以把自定义的iptv源放这儿。地址http://<ip>:<port(非容器默认8080)>/list/，
     └── cctv.txt
 ```
 ### 配置文件
