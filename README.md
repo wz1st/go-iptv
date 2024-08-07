@@ -16,8 +16,6 @@
 ### 配置文件
 ```
 config:
-  build: /build  # 容器启动不可以改
-  java_bin: /usr/bin  # 容器启动不可以改
   api_addr: http://192.168.147.139:8080   # APK接口地址，即应用/容器地址
 iptv_config:
   background: 1  #  apk背景  0关闭 1开启，多张png随机显示 png放config/images目录下
@@ -43,6 +41,15 @@ channels:
 ```
 go run main.go
 ```
+> 可选参数
+```
+-port=8080 -conf=/config -build=/build -java=
+# port接口端口  默认8080
+# conf配置文件保存位置 默认/config
+# build编译环境位置 默认/build
+# java bin目录 默认为空，即系统默认安装位置
+```
+
 访问```http://<ip>:8080```即可下载apk
 ### docker运行
 ```docker run -d --name iptv_server -p <port>:8080 -v /<path>:/config v1st233/iptv:mini```      
