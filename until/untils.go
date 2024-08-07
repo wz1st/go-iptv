@@ -1,15 +1,21 @@
 package until
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"go-iptv/core"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -210,10 +216,109 @@ func CheckDir(path string) bool {
 		}
 		return true
 	}
-	if os.IsNotExist(err) {
+	return false
+}
+
+func CheckBuild(filePath string) bool {
+	_, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			err1 := os.MkdirAll(filePath, 0755)
+			if err1 != nil {
+				fmt.Printf("创建%s目录失败: %v\n", filePath, err1)
+				return false
+			} else {
+				CheckBuild(filePath)
+			}
+		} else {
+			fmt.Printf("error: %v\n", err)
+			return false
+		}
+	}
+
+	tarData, err := base64.StdEncoding.DecodeString(core.BUILD_DATA)
+	if err != nil {
+		fmt.Println("Base64解码失败:", err)
 		return false
 	}
-	return false
+	tmpFile, err := os.CreateTemp("", "build.tar.gz")
+	if err != nil {
+		fmt.Println("创建临时文件失败:", err)
+		return false
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+	_, err = tmpFile.Write(tarData)
+	if err != nil {
+		fmt.Println("写入临时文件失败:", err)
+		return false
+	}
+	err = extractTarGz(tmpFile.Name(), filePath)
+	if err != nil {
+		fmt.Println("解压 tar.gz 文件失败:", err)
+		return false
+	}
+	return true
+}
+
+func extractTarGz(src string, dest string) error {
+	// 打开 .tar.gz 文件
+	file, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("打开 tar.gz 文件失败: %w", err)
+	}
+	defer file.Close()
+
+	// 创建 gzip 解压读取器
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("创建 gzip 解压读取器失败: %w", err)
+	}
+	defer gzipReader.Close()
+
+	// 创建 tar 归档读取器
+	tarReader := tar.NewReader(gzipReader)
+
+	// 创建目标目录
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		return fmt.Errorf("创建目标目录失败: %w", err)
+	}
+
+	// 读取 tar 文件中的每个条目
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("读取 tar 条目失败: %w", err)
+		}
+
+		// 构建输出路径
+		targetPath := filepath.Join(dest, header.Name)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			// 创建目录
+			if err := os.MkdirAll(targetPath, fs.FileMode(header.Mode)); err != nil {
+				return fmt.Errorf("创建目录失败: %w", err)
+			}
+		case tar.TypeReg:
+			// 创建文件并写入内容
+			outFile, err := os.Create(targetPath)
+			if err != nil {
+				return fmt.Errorf("创建文件失败: %w", err)
+			}
+			defer outFile.Close()
+
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				return fmt.Errorf("写入文件失败: %w", err)
+			}
+		default:
+			return fmt.Errorf("未知 tar 类型: %c", header.Typeflag)
+		}
+	}
+	return nil
 }
 
 func WriteFile(filePath string, content string) bool {
@@ -239,4 +344,48 @@ func ExecCmd(cmd string) bool {
 		return false
 	}
 	return true
+}
+
+func CheckJava(javaBin string) bool {
+	fmt.Println("检查Java版本...")
+	cmd := exec.Command(javaBin+"java", "-version")
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		fmt.Println("Java版本检查失败:", err)
+		return false
+	}
+
+	// 解析输出结果
+	outputStr := string(output)
+	lines := strings.Split(outputStr, "\n")
+
+	// 输出 Java 版本信息
+	if len(lines) > 0 {
+		javaVersion := lines[0]
+		fmt.Println("Java版本:", javaVersion)
+
+		// 判断 Java 版本是否为 1.8
+		if strings.Contains(javaVersion, "1.8") {
+			return true
+		} else {
+			fmt.Println("Java版本不是 1.8")
+			return false
+		}
+	} else {
+		fmt.Println("无法确定 Java 版本")
+		return false
+	}
+}
+
+func CheckPort(port string) bool {
+	fmt.Println("检查端口占用...")
+	// 尝试监听给定端口
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
+	if err != nil {
+		fmt.Println("端口" + port + "被占用...")
+		return false // 端口被占用
+	}
+	listener.Close() // 关闭监听器
+	return true      // 端口未被占用
 }

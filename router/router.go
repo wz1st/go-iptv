@@ -1,19 +1,20 @@
 package router
 
 import (
-	"go-iptv/bootstrap"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-func InitRouter() *gin.Engine {
+func InitRouter(conf string) *gin.Engine {
+	conf = strings.TrimSuffix(conf, "/")
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
-	r.Static("/images", bootstrap.CONFIG_PATH+"/images")
-	r.Static("/list", bootstrap.CONFIG_PATH+"/list")
-	r.Static("/apk", bootstrap.CONFIG_PATH+"/apk")
+	r.Static("/images", conf+"/images")
+	r.Static("/list", conf+"/list")
+	r.Static("/apk", conf+"/apk")
 	LoginRouter(r, "/login/")
 	ChannelsRouter(r, "/channels/")
 	EpgRouter(r, "/epg/")

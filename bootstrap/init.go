@@ -5,6 +5,7 @@ import (
 	"go-iptv/dto"
 	"go-iptv/until"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -15,12 +16,10 @@ var (
 	AES_KEY     string = "4fa7f3580dc87302"
 	IPTV_CON    map[string]string
 	CHANNELS    []dto.ConfigChannel
-	CONFIG_PATH string = "/config"
+	CONFIG_PATH string
 
 	configData string = `
 config:
-  build: /build  # 容器启动不可以改
-  java_bin: /usr/bin  # 容器启动不可以改
   api_addr: http://192.168.147.139:8080   # APK接口地址，即应用/容器地址
 iptv_config:
   background: 1  #  apk背景  0关闭 1开启，多张png随机显示 png放config/images目录下
@@ -44,7 +43,13 @@ channels:
 )
 
 // 加载配置文件
-func LoadConfig() bool {
+func LoadConfig(conf string) bool {
+	if conf != "/" {
+		conf = strings.TrimSuffix(conf, "/")
+	}
+	if CONFIG_PATH != conf {
+		CONFIG_PATH = conf
+	}
 	config := viper.New()
 	config.AddConfigPath(CONFIG_PATH)
 	config.SetConfigName("conf")
@@ -60,7 +65,7 @@ func LoadConfig() bool {
 				if !until.CheckDir(CONFIG_PATH) {
 					return false
 				}
-				return LoadConfig()
+				return LoadConfig(conf)
 			}
 			fmt.Println("找不到配置文件..")
 			fmt.Println("创建配置文件..")

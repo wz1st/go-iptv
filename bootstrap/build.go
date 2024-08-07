@@ -8,11 +8,24 @@ import (
 	"strings"
 )
 
-func BuildAPK() bool {
+func BuildAPK(buildPath string, javaPath string) bool {
 	newUrl := CONFIG["api_addr"]
-	buildPath := CONFIG["build"]
-	javaPath := CONFIG["java_bin"]
+	// buildPath := CONFIG["build"]
+	// javaPath := CONFIG["java_bin"]
+	buildPath = strings.TrimSuffix(buildPath, "/")
 	apktoolPath := buildPath + "/apktool"
+
+	if !until.CheckBuild(buildPath) {
+		return false
+	}
+
+	if !strings.HasSuffix(javaPath, "/") && javaPath != "" {
+		javaPath += "/"
+	}
+
+	if !until.CheckJava(javaPath) {
+		return false
+	}
 
 	oldPlayer := buildPath + "/smali/PlayerActivity.smali"
 	oldSplash := buildPath + "/smali/SplashActivity.smali"
@@ -22,8 +35,8 @@ func BuildAPK() bool {
 
 	if writeSmali(oldPlayer, playerActivity, newUrl) && writeSmali(oldSplash, splashActivity, newUrl) {
 		fmt.Println("编译APP...")
-		cmd1 := javaPath + "/java -Djava.io.tmpdir=" + buildPath + "/temp -jar " + apktoolPath + "/apktool.jar b " + buildPath + "/client/ -o " + buildPath + "/temp/unsignapk.apk"
-		cmd2 := javaPath + "/java -jar " + apktoolPath + "/SignApk/signapk.jar " + apktoolPath + "/SignApk/certificate.pem " + apktoolPath + "/SignApk/key.pk8 " + buildPath + "/temp/unsignapk.apk /config/apk/DSMTV.apk"
+		cmd1 := javaPath + "java -Djava.io.tmpdir=" + buildPath + "/temp -jar " + apktoolPath + "/apktool.jar b " + buildPath + "/client/ -o " + buildPath + "/temp/unsignapk.apk"
+		cmd2 := javaPath + "java -jar " + apktoolPath + "/SignApk/signapk.jar " + apktoolPath + "/SignApk/certificate.pem " + apktoolPath + "/SignApk/key.pk8 " + buildPath + "/temp/unsignapk.apk /config/apk/DSMTV.apk"
 		// cmd1 := "java -Djava.io.tmpdir=" + buildPath + "/temp -jar " + apktoolPath + "/apktool.jar b " + buildPath + "/client/ -o " + buildPath + "/temp/unsignapk.apk"
 		// cmd2 := "java -jar " + apktoolPath + "/SignApk/signapk.jar " + apktoolPath + "/SignApk/certificate.pem " + apktoolPath + "/SignApk/key.pk8 " + buildPath + "/temp/unsignapk.apk /config/apk/DSMTV.apk"
 		if until.ExecCmd(cmd1) {
