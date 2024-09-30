@@ -8,6 +8,7 @@ import (
 	"go-iptv/bootstrap"
 	"go-iptv/dto"
 	"go-iptv/until"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,10 +66,26 @@ func parseUrlData(urlData string) []dto.ChannelData {
 		keys = append(keys, key)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		// 提取键中的数字部分
-		iNum := extractNumber(keys[i])
-		jNum := extractNumber(keys[j])
-		return iNum < jNum
+		// 使用正则表达式检查字符串末尾是否是数字
+		re := regexp.MustCompile(`(\d+)$`)
+		matchI := re.FindStringSubmatch(keys[i])
+		matchJ := re.FindStringSubmatch(keys[j])
+
+		if matchI != nil && matchJ != nil {
+			// 两者都以数字结尾，按数字排序
+			numI, _ := strconv.Atoi(matchI[1])
+			numJ, _ := strconv.Atoi(matchJ[1])
+			return numI < numJ
+		} else if matchI != nil {
+			// 只有 i 以数字结尾，排在前面
+			return true
+		} else if matchJ != nil {
+			// 只有 j 以数字结尾，排在前面
+			return false
+		}
+
+		// 两者都不以数字结尾，按中文排序
+		return keys[i] < keys[j]
 	})
 	for _, key := range keys {
 		classList = append(classList, dto.ChannelData{
@@ -79,17 +96,6 @@ func parseUrlData(urlData string) []dto.ChannelData {
 		i += 1
 	}
 	return classList
-}
-
-func extractNumber(name string) int {
-	var numStr string
-	for _, char := range name {
-		if char >= '0' && char <= '9' {
-			numStr += string(char)
-		}
-	}
-	num, _ := strconv.Atoi(numStr)
-	return num
 }
 
 func encrypt(str string, randkey string) string {
