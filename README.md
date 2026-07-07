@@ -45,17 +45,6 @@ docker run -d --name iptv_server -p port:80 -v iptv:/config image_name:latest
 ``` 
 ## 使用
 容器跑起来后访问`http://<ip>:<port>`即可，根据提示安装系统，然后登录添加源->修改套餐->下载安装APK->授权用户即可使用
-
-## 打赏
->如果觉得好用，请打赏支持一下
-
-<div style="display: flex; justify-content: center; gap: 50px;" id="install-show">
-  <img src="./static/images/wxpay.jpg" alt="微信" width="300">
-  <img src="./static/images/zfbpay.jpg" alt="支付宝" width="300">
-</div>
-
-
-
 ## 小声哔哔
 >本程序仅供学习交流使用，请勿用于商业用途，否则后果自负。     
 >本程序不保证长期稳定运行，请自行备份。     
