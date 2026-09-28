@@ -1,6 +1,4 @@
 name: 构建镜像并发布
-
-# 触发：推送三段版本号标签 vX.Y.Z（可带 -beta 后缀做预发布）
 on:
   push:
     tags:
@@ -13,8 +11,6 @@ on:
 
 permissions:
   contents: write
-
-# 同一 ref 重复触发时排队而非并行；进行中的发版绝不取消，半路取消会留下只有镜像没有 release 的残局
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -28,8 +24,6 @@ env:
   WEB_REPO: wz1st/iptv-web
   START_REPO: wz1st/iptv-start
 
-# 四个组件互不依赖，拆成 4 个 job 并行；最后由 image job 汇总产物、发 release、推镜像。
-# 引擎是个例外：不在本工作流编译，只消费 iptv-engine 已发布的 release（见 engine job）。
 jobs:
   prepare:
     runs-on: ubuntu-latest
@@ -38,7 +32,7 @@ jobs:
       version: ${{ steps.parse.outputs.version }}
       prerelease: ${{ steps.parse.outputs.prerelease }}
     steps:
-      # api 的版本号 = 镜像 tag = 本仓 release tag，三者必须同一个值
+      
       - name: 解析版本号
         id: parse
         run: |
@@ -55,7 +49,7 @@ jobs:
             echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
 
-  # iptv-web（公开仓）→ webdist/，纯静态站点由 nginx 直出
+  
   web:
     needs: prepare
     runs-on: ubuntu-latest
@@ -70,7 +64,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: web-src/package-lock.json
-      # APP_VERSION 由 vite.config.js 的 injectAppVersion 插件写进 index.html
+      
       - name: 构建前端
         env:
           APP_VERSION: ${{ needs.prepare.outputs.version }}
@@ -92,7 +86,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # iptv-start（公开仓）→ start_all/start_<arch>
+  
   start:
     needs: prepare
     runs-on: ubuntu-latest
@@ -128,7 +122,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # iptv-api（本仓）→ iptv_all/，gofmt / vet / test 不过就不出产物
+  
   app:
     needs: prepare
     runs-on: ubuntu-latest
@@ -156,7 +150,7 @@ jobs:
               go build -ldflags "-s -w -X iptv-api/until.Version=$VERSION" \
               -o "../iptv_all/iptv_$a" main.go
           done
-          # 立刻验证注入生效：ldflags 路径写错时症状只是"版本号显示成源码默认值"，很晚才会被发现
+          
           ../iptv_all/iptv_amd64 -version | grep -qx "$VERSION" \
             || { echo "::error::iptv 二进制报告的版本不是 $VERSION"; ../iptv_all/iptv_amd64 -version; exit 1; }
           ls -l ../iptv_all
@@ -167,24 +161,24 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # iptv-engine（私有仓）→ engine_all/。
-  # 引擎的**唯一发布者**是引擎仓自己的 CI（推 vX.Y.Z tag → 发 engine-vX.Y.Z release），
-  # 本工作流只按版本号取最高的一版，避免两处都往同一个发布位写、互相覆盖出旧版本。
-  # 发布位保留历史（不清理）：旧版 api 可能正指着旧引擎，删掉就等于打断它的升级路径。
+  
+  
+  
+  
   engine:
     needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      # 版本号取自 release 标签（iptv-api 的 CheckNewVerEngine 也按同一前缀取），
-      # 所以必须过滤 prerelease，否则预发布版会被当成"最新引擎"。
-      # 而且发布位**保留历史**，补发/重跑旧 tag 会让"发布最晚"≠"版本最高"，
-      # 因此按版本号三段数值排序取最大，不看 created_at。
-      # 还要求资产构成对得上身份：必须带 SHA256SUMSEngine.txt、且**不带 api 的
-      # SHA256SUMS.txt** —— 发布位里真有过"标签像引擎、里面装着 api 产物"的脏数据
-      # （engine-v3.0.1 混着 iptv_amd64 / SHA256SUMS.txt / Version），只看标签就会
-      # 把它选成引擎的"最新版"。判据与 iptv-api/until/updataUntil.go 的
-      # isEngineRelease、Dockerfile 的 latest_tag 三处一致。
+      
+      
+      
+      
+      
+      
+      
+      
+      
       - name: 找最新稳定引擎 release
         id: rel
         env:
@@ -192,17 +186,17 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # ⚠️ gh 的 --slurp 与 --jq 互斥（"the --slurp option is not supported with
-          # --jq or --template"）：同时给出时 gh 直接报错退出、标签取空，后面的三架构
-          # 校验全部落空。所以这里**不用 gh 自带的 --jq**：gh 只负责翻页吐原文，
-          # 展平交给外部 jq（--paginate 的输出是「每页一个数组」拼在一起，必须先 add）。
-          # `add // []` 的空守卫不能去掉：jq 对 null 做 `.[]` 会直接报
-          # "Cannot iterate over null" 并以 rc=5 退出，那样报出来的是 jq 的错，
-          # 而不是下面那句"本仓还没有稳定引擎 release"。
-          # `(last // {})` 同理：空数组的 last 是 null，直接 `.tag_name` 会 rc=5。
-          # 末尾 tr 保留：`\r` 一并删 —— CR 混进 tag 会让 gh release download 拼
-          # 出一个不存在的标签；`"` 是一层防御（`jq -r` 本就不加引号，但 Windows
-          # 侧 jq 会带 CRLF，而这两样症状在 CI 里长得一模一样：找不到资产）。
+          
+          
+          
+          
+          
+          
+          
+          
+          
+          
+          
           TAG=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
             | jq -rs 'add // []
                   | [.[] | select((.prerelease|not)
@@ -216,8 +210,8 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "使用引擎 release：$TAG"
 
-      # 清单校验 + 三架构齐全一起断言：镜像的 TARGET_PLATFORMS 是三个平台，
-      # 少一份产物会在 buildx 那步才炸，代价比这里大得多。
+      
+      
       - name: 下载并校验引擎产物
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -226,17 +220,22 @@ jobs:
         run: |
           set -e
           mkdir -p engine_all
-          # 逐份显式列出，不用 `engine_*` 通配：通配等于把"发布位里有什么"当契约，
-          # 而发布位里混进过 api 产物（engine-v3.0.1 带着 iptv_amd64 / Version）。
+          
+          
           gh release download "$TAG" --repo "$REPO" --dir engine_all --clobber \
             --pattern 'engine_amd64' --pattern 'engine_arm' --pattern 'engine_arm64' \
             --pattern 'SHA256SUMSEngine.txt'
+
+          # release 资产是裸 blob、不保存 mode ⇒ 下载回来一律 0644，要执行就得自己 chmod
           ls -l engine_all
-          ( cd engine_all && sha256sum -c SHA256SUMSEngine.txt )
+          # 先断言齐全再 chmod：反过来时缺产物会由 chmod 抢着报 "cannot access"，把问题说成工具报错
           for a in amd64 arm arm64; do
-            test -f "engine_all/engine_$a" \
-              || { echo "::error::$TAG 里缺少 engine_$a，镜像需要三架构齐全"; exit 1; }
+            f="engine_all/engine_$a"
+            test -f "$f" || { echo "::error::$TAG 里缺少 engine_$a，镜像需要三架构齐全"; exit 1; }
+            chmod +x "$f"
+            test -x "$f" || { echo "::error::engine_$a 没有可执行位（release 资产不带 mode，必须显式 chmod）"; exit 1; }
           done
+          ( cd engine_all && sha256sum -c SHA256SUMSEngine.txt )
       - uses: actions/upload-artifact@v4
         with:
           name: engine_all
@@ -244,7 +243,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # 汇总四个 job 的产物 → 发 release → 推镜像；release 先于镜像，产物才是真源
+  
   image:
     needs: [prepare, web, start, app, engine]
     runs-on: ubuntu-latest
@@ -252,7 +251,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 构建产物分散在四个 runner 上，只能靠 artifact 收回来
       - uses: actions/download-artifact@v4
         with:
           name: webdist
@@ -270,13 +268,21 @@ jobs:
           name: start_all
           path: start_all
 
-      # 校验清单的文件名必须与 iptv-api/until/updataUntil.go 里查的逐字一致
+      
       - name: 生成前端整包与校验清单
         run: |
           set -e
+          # artifact 传递同样丢 mode（app job 里 0755 ⇒ 本 job 下载后 0644），三个目录九份产物都要补
           ls -l iptv_all engine_all start_all
-          # 引擎版本号问产物自己，只校验形状；发布位与版本的一致性由引擎仓 CI 负责
-          ENG=$(./engine_all/engine_amd64 -version | tr -d '\r')
+          for f in iptv_all/iptv_amd64 iptv_all/iptv_arm iptv_all/iptv_arm64 \
+                   start_all/start_amd64 start_all/start_arm start_all/start_arm64 \
+                   engine_all/engine_amd64 engine_all/engine_arm engine_all/engine_arm64; do
+            test -f "$f" || { echo "::error::缺少产物 $f（artifact 没传全？）"; exit 1; }
+            chmod +x "$f"
+          done
+          # 别写成 ENG=$(... -version | tr)：管道退出码取自 tr，前半段失败会被 set -e 漏掉
+          ENG=$(./engine_all/engine_amd64 -version)
+          ENG=$(printf '%s' "$ENG" | tr -d '\r')
           echo "引擎版本：$ENG"
           case "$ENG" in
             v[0-9]*.[0-9]*.[0-9]*) ;;
@@ -286,16 +292,9 @@ jobs:
           tar -czf iptv_all/webdist.tar.gz webdist
           tar -tzf iptv_all/webdist.tar.gz | head -5
 
-          # 只生成 api 侧的清单：本仓 release 里只放 api 产物。
-          # 引擎清单（SHA256SUMSEngine.txt）由 engine job 从发布位下载后当场
-          # `sha256sum -c` 校验过，且它属于引擎的发布位（engine-vX.Y.Z），不进本 release。
           ( cd iptv_all && sha256sum iptv_amd64 iptv_arm iptv_arm64 webdist.tar.gz > SHA256SUMS.txt )
           cat iptv_all/SHA256SUMS.txt
 
-      # 发布：api 到本仓 releases。`files: iptv_all/*` 里只有 api 侧产物
-      # （iptv_<arch> / webdist.tar.gz / SHA256SUMS.txt）—— 引擎产物一律不进这个
-      # release，它的发布位是 engine-vX.Y.Z，由 iptv-engine 的 CI 独家维护：
-      # 两处都往同一个发布位写，会让旧版本把新版本顶回去（版本号取自标签）。
       - name: 发布 api 到 go-iptv releases
         uses: softprops/action-gh-release@v2
         with:
@@ -306,7 +305,6 @@ jobs:
           overwrite_files: true
           files: iptv_all/*
 
-      # 前端与启动器的源码不在本仓，各自回源码仓留一份 release（未配令牌则跳过）
       - name: 探测跨仓发布令牌
         run: |
           if [ -n "${{ secrets.OTHER_REPO_TOKEN }}" ]; then
@@ -348,7 +346,7 @@ jobs:
       - name: 准备 Buildx
         uses: docker/setup-buildx-action@v3
 
-      # armv7 的 TARGETARCH 是 arm；关 provenance/sbom 免清单膨胀；开 GHA 层缓存复用 apk 与 build-tools（130MB）那一大层
+      
       - name: 构建并推送多架构镜像
         uses: docker/build-push-action@v6
         with:
@@ -366,7 +364,7 @@ jobs:
           cache-from: type=gha,scope=iptv-image
           cache-to: type=gha,scope=iptv-image,mode=max
 
-      # 推完立刻在远端清单上确认三架构都在，别等用户拉不到才发现
+      
       - name: 校验镜像清单
         run: |
           set -e

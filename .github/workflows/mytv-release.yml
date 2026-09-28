@@ -34,7 +34,7 @@ jobs:
         run: |
           set -e
           TAG="${{ github.event.inputs.version || github.ref_name }}"
-          V="${TAG#mytv-v}"
+          V="$(printf '%s' "$TAG" | sed 's/^mytv-v//')"
           printf '%s' "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
             || { echo "::error::标签必须是 mytv-vX.Y.Z（收到 $TAG）"; exit 1; }
           FILE_V="$(tr -d ' \r\n' < mytv/Version_mytv)"

@@ -1,25 +1,15 @@
-# docker-compose —— iptv（前后端分离版）：直接拉取已发布镜像，不在本机构建。
-
 services:
   iptv:
-    # 由 CI 打 vX.Y.Z 标签时构建并推送的多架构镜像（amd64 / armv7 / arm64）。
     image: v1st233/iptv:latest
     container_name: iptv-web
-
-    # 「中转访问」需要 privileged 才能正确监听端口
+    # 进阶功能所需高权限
     privileged: true
-
     ports:
-      - "8090:80"      # nginx：管理后台 / 前台下载页 / 全部接口 / 中转（/p/）
-      # 中转服务（容器内 8080）不需要也不应该映射到宿主
-
+      - "8090:80" # 不支持host模式，存在不少的端口冲突
     volumes:
       - ./data:/config
-
     restart: unless-stopped
-
     healthcheck:
-      # 走完整链路：nginx → iptv-api → /version
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/version"]
       interval: 30s
       timeout: 5s
