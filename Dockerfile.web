@@ -1,10 +1,4 @@
-
-ARG APK_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
-
-
 FROM alpine:latest
-
-ARG APK_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
 
 ENV TZ=Asia/Shanghai
 ENV ANDROID_HOME=/opt/android-sdk
@@ -21,8 +15,7 @@ COPY database /app/database
 COPY logo /app/logo
 COPY mytv /app/mytv
 
-RUN sed -i "s|https\?://dl-cdn.alpinelinux.org/alpine|${APK_MIRROR}|g" /etc/apk/repositories \
- && apk add --no-cache \
+RUN apk add --no-cache \
         openjdk17 \
         bash \
         curl \

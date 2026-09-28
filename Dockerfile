@@ -189,7 +189,8 @@ COPY database /app/database
 COPY logo /app/logo
 COPY mytv /app/mytv
 
-RUN sed -i "s && apk add --no-cache \
+RUN sed -i "s|https\?://dl-cdn.alpinelinux.org/alpine|${APK_MIRROR}|g" /etc/apk/repositories \
+ && apk add --no-cache \
         openjdk17 \
         bash \
         curl \
