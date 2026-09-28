@@ -20,7 +20,7 @@ env:
   NODE_VERSION: '22'
   GOPROXY: https://goproxy.cn,direct
   GOSUMDB: sum.golang.google.cn
-  TARGET_PLATFORMS: linux/amd64,linux/arm/v7,linux/arm64
+  TARGET_PLATFORMS: linux/amd64,linux/arm64
   WEB_REPO: wz1st/iptv-web
   START_REPO: wz1st/iptv-start
 
@@ -100,7 +100,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: start-src/go.sum
-      - name: 构建启动器（amd64 / armv7 / armv8）
+      - name: 构建启动器（amd64 / armv8）
         run: |
           set -e
           cd start-src
@@ -109,9 +109,9 @@ jobs:
           go vet ./...
           go test ./... -count=1
           mkdir -p ../start_all
-          for a in amd64 arm arm64; do
+          for a in amd64 arm64; do
             echo ">> start $a"
-            CGO_ENABLED=0 GOOS=linux GOARCH="$a" GOARM=7 \
+            CGO_ENABLED=0 GOOS=linux GOARCH="$a" \
               go build -ldflags '-s -w' -o "../start_all/start_$a" .
           done
           ls -l ../start_all
@@ -133,7 +133,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: iptv-api/go.sum
-      - name: 构建 iptv-api（amd64 / armv7 / armv8）
+      - name: 构建 iptv-api（amd64 / armv8）
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
@@ -144,7 +144,7 @@ jobs:
           go vet ./...
           go test ./... -count=1
           mkdir -p ../iptv_all
-          for a in amd64 arm arm64; do
+          for a in amd64 arm64; do
             echo ">> iptv-api $a"
             CGO_ENABLED=0 GOOS=linux GOARCH="$a" \
               go build -ldflags "-s -w -X iptv-api/until.Version=$VERSION" \
@@ -223,15 +223,15 @@ jobs:
           
           
           gh release download "$TAG" --repo "$REPO" --dir engine_all --clobber \
-            --pattern 'engine_amd64' --pattern 'engine_arm' --pattern 'engine_arm64' \
+            --pattern 'engine_amd64' --pattern 'engine_arm64' \
             --pattern 'SHA256SUMSEngine.txt'
 
           # release 资产是裸 blob、不保存 mode ⇒ 下载回来一律 0644，要执行就得自己 chmod
           ls -l engine_all
           # 先断言齐全再 chmod：反过来时缺产物会由 chmod 抢着报 "cannot access"，把问题说成工具报错
-          for a in amd64 arm arm64; do
+          for a in amd64 arm64; do
             f="engine_all/engine_$a"
-            test -f "$f" || { echo "::error::$TAG 里缺少 engine_$a，镜像需要三架构齐全"; exit 1; }
+            test -f "$f" || { echo "::error::$TAG 里缺少 engine_$a，镜像需要 amd64 / arm64 齐全"; exit 1; }
             chmod +x "$f"
             test -x "$f" || { echo "::error::engine_$a 没有可执行位（release 资产不带 mode，必须显式 chmod）"; exit 1; }
           done
@@ -272,11 +272,11 @@ jobs:
       - name: 生成前端整包与校验清单
         run: |
           set -e
-          # artifact 传递同样丢 mode（app job 里 0755 ⇒ 本 job 下载后 0644），三个目录九份产物都要补
+          # artifact 传递同样丢 mode（app job 里 0755 ⇒ 本 job 下载后 0644），三个目录六份产物都要补
           ls -l iptv_all engine_all start_all
-          for f in iptv_all/iptv_amd64 iptv_all/iptv_arm iptv_all/iptv_arm64 \
-                   start_all/start_amd64 start_all/start_arm start_all/start_arm64 \
-                   engine_all/engine_amd64 engine_all/engine_arm engine_all/engine_arm64; do
+          for f in iptv_all/iptv_amd64 iptv_all/iptv_arm64 \
+                   start_all/start_amd64 start_all/start_arm64 \
+                   engine_all/engine_amd64 engine_all/engine_arm64; do
             test -f "$f" || { echo "::error::缺少产物 $f（artifact 没传全？）"; exit 1; }
             chmod +x "$f"
           done
@@ -292,7 +292,7 @@ jobs:
           tar -czf iptv_all/webdist.tar.gz webdist
           tar -tzf iptv_all/webdist.tar.gz | head -5
 
-          ( cd iptv_all && sha256sum iptv_amd64 iptv_arm iptv_arm64 webdist.tar.gz > SHA256SUMS.txt )
+          ( cd iptv_all && sha256sum iptv_amd64 iptv_arm64 webdist.tar.gz > SHA256SUMS.txt )
           cat iptv_all/SHA256SUMS.txt
 
       - name: 发布 api 到 go-iptv releases
@@ -334,7 +334,7 @@ jobs:
             || gh release create "$VERSION" --repo "$START_REPO" \
                  --title "$VERSION" --notes "启动器产物 $VERSION"
           gh release upload "$VERSION" \
-            start_all/start_amd64 start_all/start_arm start_all/start_arm64 \
+            start_all/start_amd64 start_all/start_arm64 \
             --repo "$START_REPO" --clobber
 
       - name: 登录镜像仓库
@@ -370,6 +370,6 @@ jobs:
           set -e
           docker buildx imagetools inspect \
             ${{ secrets.DOCKER_USERNAME }}/iptv:${{ needs.prepare.outputs.version }} | tee /tmp/mi.txt
-          for p in linux/amd64 linux/arm/v7 linux/arm64; do
+          for p in linux/amd64 linux/arm64; do
             grep -q "$p" /tmp/mi.txt || { echo "::error::镜像清单里没有 $p"; exit 1; }
           done

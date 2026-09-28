@@ -89,14 +89,12 @@ if [ -z "$MACH" ]; then
   case "$(uname -m)" in
     x86_64) MACH=amd64 ;;
     aarch64) MACH=arm64 ;;
-    armv7l|armv6l|arm) MACH=arm ;;
   esac
 fi
 case "${MACH}${TARGETVARIANT:-}" in
   amd64) ARCH=amd64; EM=62 ;;
   arm64) ARCH=arm64; EM=183 ;;
-  arm|armv7|armv7l) ARCH=arm; EM=40 ;;
-  *) fail "不支持的架构 TARGETARCH=${MACH} TARGETVARIANT=${TARGETVARIANT:-}（发布资产只有 amd64 / arm / arm64）" ;;
+  *) fail "不支持的架构 TARGETARCH=${MACH} TARGETVARIANT=${TARGETVARIANT:-}（发布资产只有 amd64 / arm64）" ;;
 esac
 note "架构 ${MACH}${TARGETVARIANT:-} -> 资产后缀 ${ARCH}"
 
@@ -246,8 +244,8 @@ COPY config.yml README.md dictionary.txt alias.json ChangeLog.md keystore.p12 /a
 ARG TARGETARCH=amd64
 
 RUN case "${TARGETARCH}" in \
-        amd64|arm|arm64) echo "目标架构: ${TARGETARCH}" ;; \
-        *) echo "FATAL: 不支持的架构 ${TARGETARCH}（仅 amd64 / arm / arm64 有产物）" >&2; exit 1 ;; \
+        amd64|arm64) echo "目标架构: ${TARGETARCH}" ;; \
+        *) echo "FATAL: 不支持的架构 ${TARGETARCH}（仅 amd64 / arm64 有产物）" >&2; exit 1 ;; \
     esac
 
 COPY --from=fetch --chmod=0755 /dl/out/iptv /app/iptv

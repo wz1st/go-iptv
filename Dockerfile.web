@@ -71,8 +71,8 @@ COPY config.yml README.md dictionary.txt alias.json ChangeLog.md keystore.p12 /a
 ARG TARGETARCH=amd64
 
 RUN case "${TARGETARCH}" in \
-        amd64|arm|arm64) echo "目标架构: ${TARGETARCH}" ;; \
-        *) echo "FATAL: 不支持的架构 ${TARGETARCH}（仅 amd64 / arm / arm64 有产物）" >&2; exit 1 ;; \
+        amd64|arm64) echo "目标架构: ${TARGETARCH}" ;; \
+        *) echo "FATAL: 不支持的架构 ${TARGETARCH}（仅 amd64 / arm64 有产物）" >&2; exit 1 ;; \
     esac
 
 COPY --chmod=0755 iptv_all/iptv_${TARGETARCH} /app/iptv
