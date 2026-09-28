@@ -20,6 +20,14 @@ const (
 // mytvTagRe 只匹配基底发布标签；api 的 vX.Y.Z 与引擎的 engine-vX.Y.Z 都不会命中。
 var mytvTagRe = regexp.MustCompile(`^mytv-v\d+\.\d+\.\d+$`)
 
+// isMytvBaseRelease 判断一个 release 是不是基底发布：标签形状 + 资产构成。
+// 与 api / 引擎同理 —— 光看标签认不准身份，两个契约资产必须同时在场，
+// 否则脏发布会被选中，一路拖到下载阶段才报"缺少资产"。
+func isMytvBaseRelease(r *githubRelease) bool {
+	return mytvTagRe.MatchString(r.TagName) &&
+		hasAsset(r, mytvBaseAsset) && hasAsset(r, mytvVersionAsset)
+}
+
 // MytvBaseRelease 是一份远端基底发布的摘要。
 type MytvBaseRelease struct {
 	Tag     string // mytv-v1.2.3
@@ -34,13 +42,15 @@ func mytvVersionFromTag(tag string) string {
 	return strings.TrimPrefix(tag, mytvTagPrefix)
 }
 
-// LatestMytvBaseRelease 取远端最新一版基底发布（正式版，跳过 prerelease）。
+// LatestMytvBaseRelease 取远端最新一版基底发布（正式版，跳过 prerelease；
+// 标签像基底但少了契约资产的一律跳过，见 isMytvBaseRelease）。
 func LatestMytvBaseRelease() (*MytvBaseRelease, error) {
-	rel, err := fetchLatestStableRelease(func(tag string) bool { return mytvTagRe.MatchString(tag) })
+	rel, err := fetchLatestStableRelease(isMytvBaseRelease)
 	if err != nil {
 		return nil, err
 	}
 	urls := assetURLs(rel)
+	// 挑选阶段已保证两个资产在场，这里是最后一道：URL 映射是另一条路径，值得单独确认。
 	if urls[mytvBaseAsset] == "" || urls[mytvVersionAsset] == "" {
 		return nil, fmt.Errorf("发布 %s 缺少资产 %s / %s",
 			rel.TagName, mytvBaseAsset, mytvVersionAsset)

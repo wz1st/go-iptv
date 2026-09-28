@@ -109,6 +109,14 @@ GITHUB_TOKEN=ghp_xxx docker build -f Dockerfile --secret id=gh_token,env=GITHUB_
 > **历史引擎 release 一律保留、不清理**：旧版 api 可能正指着旧引擎，删掉就等于打断它的升级
 > 路径。因此挑选逻辑统一按版本号数值比较，不看发布时间（补发旧 tag 会让"发布最晚"≠"版本最高"）。
 >
+> **发布身份由资产构成认定，不只看标签前缀**：同一发布位里 api / 引擎 / mytv 三条序列靠标签
+> 前缀分流，但发布位里真出现过"标签像引擎、里面装着 api 产物"（`engine-v3.0.1` 混着
+> `iptv_amd64` / `SHA256SUMS.txt` / `Version`）和"一个资产都没有"（`v4.0.1`）的脏数据。只看标签
+> 会把这些当候选 —— 轻则"检查更新"报出误导性版本号，重则一路走到下载阶段才报"没有资产"。
+> 所以挑选时同时要求：带自己那套校验清单、且**不带对方的**。判据在四处保持一致：iptv-api 的
+> `isApiRelease` / `isEngineRelease` / `isMytvBaseRelease`、本仓 CI 的 jq 过滤、
+> `Dockerfile` 的 `latest_tag`、以及引擎仓 CI 发布后的资产集合闸门。
+>
 > mytv 客户端的编译基底 `mytv/MyTV.apk` 随本仓入库，构建时直接打进 `/app/mytv`，不从网络下载。
 
 ## 使用

@@ -180,6 +180,11 @@ jobs:
       # 所以必须过滤 prerelease，否则预发布版会被当成"最新引擎"。
       # 而且发布位**保留历史**，补发/重跑旧 tag 会让"发布最晚"≠"版本最高"，
       # 因此按版本号三段数值排序取最大，不看 created_at。
+      # 还要求资产构成对得上身份：必须带 SHA256SUMSEngine.txt、且**不带 api 的
+      # SHA256SUMS.txt** —— 发布位里真有过"标签像引擎、里面装着 api 产物"的脏数据
+      # （engine-v3.0.1 混着 iptv_amd64 / SHA256SUMS.txt / Version），只看标签就会
+      # 把它选成引擎的"最新版"。判据与 iptv-api/until/updataUntil.go 的
+      # isEngineRelease、Dockerfile 的 latest_tag 三处一致。
       - name: 找最新稳定引擎 release
         id: rel
         env:
@@ -194,16 +199,20 @@ jobs:
           # `add // []` 的空守卫不能去掉：jq 对 null 做 `.[]` 会直接报
           # "Cannot iterate over null" 并以 rc=5 退出，那样报出来的是 jq 的错，
           # 而不是下面那句"本仓还没有稳定引擎 release"。
+          # `(last // {})` 同理：空数组的 last 是 null，直接 `.tag_name` 会 rc=5。
           # 末尾 tr 保留：`\r` 一并删 —— CR 混进 tag 会让 gh release download 拼
           # 出一个不存在的标签；`"` 是一层防御（`jq -r` 本就不加引号，但 Windows
           # 侧 jq 会带 CRLF，而这两样症状在 CI 里长得一模一样：找不到资产）。
           TAG=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
             | jq -rs 'add // []
-                  | [.[] | select((.prerelease|not) and (.tag_name|test("^engine-v[0-9]+\\.[0-9]+\\.[0-9]+$")))]
+                  | [.[] | select((.prerelease|not)
+                                  and (.tag_name|test("^engine-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+                                  and ([.assets[]?.name]|index("SHA256SUMSEngine.txt") != null)
+                                  and ([.assets[]?.name]|index("SHA256SUMS.txt") == null))]
                   | sort_by(.tag_name | ltrimstr("engine-v") | split(".") | map(tonumber))
-                  | last | .tag_name // ""' \
+                  | (last // {}) | .tag_name // ""' \
             | tr -d '"\r')
-          [ -n "$TAG" ] || { echo "::error::本仓还没有稳定引擎 release（engine-vX.Y.Z）。请先在 iptv-engine 推一个 vX.Y.Z 标签，让引擎仓的 CI 发布"; exit 1; }
+          [ -n "$TAG" ] || { echo "::error::本仓还没有合格的稳定引擎 release（engine-vX.Y.Z，且带 SHA256SUMSEngine.txt、不含 api 产物）。请先在 iptv-engine 推一个 vX.Y.Z 标签，让引擎仓的 CI 发布"; exit 1; }
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "使用引擎 release：$TAG"
 
@@ -217,8 +226,11 @@ jobs:
         run: |
           set -e
           mkdir -p engine_all
-          gh release download "$TAG" --repo "$REPO" --dir engine_all \
-            --pattern 'engine_*' --pattern 'SHA256SUMSEngine.txt' --clobber
+          # 逐份显式列出，不用 `engine_*` 通配：通配等于把"发布位里有什么"当契约，
+          # 而发布位里混进过 api 产物（engine-v3.0.1 带着 iptv_amd64 / Version）。
+          gh release download "$TAG" --repo "$REPO" --dir engine_all --clobber \
+            --pattern 'engine_amd64' --pattern 'engine_arm' --pattern 'engine_arm64' \
+            --pattern 'SHA256SUMSEngine.txt'
           ls -l engine_all
           ( cd engine_all && sha256sum -c SHA256SUMSEngine.txt )
           for a in amd64 arm arm64; do
@@ -274,12 +286,16 @@ jobs:
           tar -czf iptv_all/webdist.tar.gz webdist
           tar -tzf iptv_all/webdist.tar.gz | head -5
 
-          ( cd iptv_all   && sha256sum iptv_amd64 iptv_arm iptv_arm64 webdist.tar.gz > SHA256SUMS.txt )
-          ( cd engine_all && sha256sum engine_amd64 engine_arm engine_arm64 > SHA256SUMSEngine.txt )
-          cat iptv_all/SHA256SUMS.txt engine_all/SHA256SUMSEngine.txt
+          # 只生成 api 侧的清单：本仓 release 里只放 api 产物。
+          # 引擎清单（SHA256SUMSEngine.txt）由 engine job 从发布位下载后当场
+          # `sha256sum -c` 校验过，且它属于引擎的发布位（engine-vX.Y.Z），不进本 release。
+          ( cd iptv_all && sha256sum iptv_amd64 iptv_arm iptv_arm64 webdist.tar.gz > SHA256SUMS.txt )
+          cat iptv_all/SHA256SUMS.txt
 
-      # 发布：api 到本仓 releases。引擎不在这里发 —— 它的发布位（engine-vX.Y.Z）由
-      # iptv-engine 的 CI 维护，两处都发会让旧版本把新版本顶回去（版本号取自标签）。
+      # 发布：api 到本仓 releases。`files: iptv_all/*` 里只有 api 侧产物
+      # （iptv_<arch> / webdist.tar.gz / SHA256SUMS.txt）—— 引擎产物一律不进这个
+      # release，它的发布位是 engine-vX.Y.Z，由 iptv-engine 的 CI 独家维护：
+      # 两处都往同一个发布位写，会让旧版本把新版本顶回去（版本号取自标签）。
       - name: 发布 api 到 go-iptv releases
         uses: softprops/action-gh-release@v2
         with:

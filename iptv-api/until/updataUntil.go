@@ -28,6 +28,17 @@ const (
 // 以及启动器 until/webBundleName 逐字一致 —— 三处任一处改名就是"下载不到"。
 const frontAssetName = "webdist.tar.gz"
 
+// apiSumsName / engineSumsName 是两个序列各自的校验清单名。
+//
+// 它们不只是下载后对哈希用的 —— 更是**判定 release 身份**的依据：清单由发布流程
+// 无条件产出，比标签前缀更能说明"这个 release 里装的到底是谁的产物"。
+// 名字必须与 CI（Dockerfile 的 cp、docker-image.yml 的 sha256sum、引擎仓 CI 的
+// sha256sum）逐字一致；两处只差一个后缀，所以比较一律精确相等，不许前缀匹配。
+const (
+	apiSumsName    = "SHA256SUMS.txt"
+	engineSumsName = "SHA256SUMSEngine.txt"
+)
+
 // appTagRe 只匹配 api/镜像的标签，engine-vX.Y.Z 不会命中。
 var appTagRe = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 
@@ -57,15 +68,19 @@ func releaseAPIURL() string {
 		releaseOwner, releaseRepo, releasePerPage)
 }
 
+// releaseAsset 是发布资产。具名而不是匿名内嵌，好让测试直接构造带资产的发布
+// （资产构成是判定发布身份的依据，测试必须能造出来）。
+type releaseAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
 type githubRelease struct {
-	TagName     string    `json:"tag_name"`
-	Prerelease  bool      `json:"prerelease"`
-	PublishedAt time.Time `json:"published_at"`
-	CreatedAt   time.Time `json:"created_at"`
-	Assets      []struct {
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-	} `json:"assets"`
+	TagName     string         `json:"tag_name"`
+	Prerelease  bool           `json:"prerelease"`
+	PublishedAt time.Time      `json:"published_at"`
+	CreatedAt   time.Time      `json:"created_at"`
+	Assets      []releaseAsset `json:"assets"`
 }
 
 // UpdateSignal 通知启动器应用 /config/updata 里已下载好的升级包。
@@ -85,9 +100,10 @@ func UpdateSignal() error {
 
 // 拉取 release
 
-// fetchLatestStableRelease 取发布列表里「版本最高的、正式的、标签满足 keep」的那一个。
-// keep 用来把同一仓库里的 api / 引擎 / mytv 三个序列区分开。
-func fetchLatestStableRelease(keep func(string) bool) (*githubRelease, error) {
+// fetchLatestStableRelease 取发布列表里「版本最高的、正式的、keep 认可」的那一个。
+// keep 把同一个发布位里的 api / 引擎 / mytv 三条序列区分开 —— 只认标签不够，
+// 详见 isApiRelease 的说明。
+func fetchLatestStableRelease(keep func(*githubRelease) bool) (*githubRelease, error) {
 	releases, err := fetchAllReleases()
 	if err != nil {
 		return nil, err
@@ -134,18 +150,20 @@ func fetchAllReleases() ([]githubRelease, error) {
 	})
 }
 
-// pickLatestStable 从发布列表里挑出「版本最高的、正式的、标签满足 keep」的那一个。
+// pickLatestStable 从发布列表里挑出「版本最高的、正式的、keep 认可的」那一个。
 //
 // 判据是**版本号**而不是发布时间：发布位保留历史（旧版 api 可能还指着旧引擎，
 // 删掉就等于打断它的升级路径），补发/重跑旧 tag 会让"发布最晚"≠"版本最高"，
 // 按时间挑就会把客户端按回旧版本 —— 表现为"明明发新版了却检查不到更新"。
 // 版本号相同时才用发布时间兜底（同一 tag 被重发过）。
-func pickLatestStable(releases []githubRelease, keep func(string) bool) (*githubRelease, error) {
+//
+// keep 收整个 release 而不只是标签：光看标签认不准身份（见 isApiRelease 的说明）。
+func pickLatestStable(releases []githubRelease, keep func(*githubRelease) bool) (*githubRelease, error) {
 	var latest *githubRelease
 	var latestVer [3]int
 	for i := range releases {
 		r := &releases[i]
-		if r.Prerelease || !keep(r.TagName) {
+		if r.Prerelease || !keep(r) {
 			continue
 		}
 		v := tagVersion(r.TagName)
@@ -163,12 +181,42 @@ func pickLatestStable(releases []githubRelease, keep func(string) bool) (*github
 	return latest, nil
 }
 
+// hasAsset 精确判断 release 里有没有这个资产。
+// 必须精确相等：两个清单名只差一个后缀（SHA256SUMS.txt / SHA256SUMSEngine.txt），
+// 前缀匹配会让它们互相命中。
+func hasAsset(rel *githubRelease, name string) bool {
+	for _, a := range rel.Assets {
+		if a.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// isApiRelease / isEngineRelease 判断一个 release 是不是本序列的正式发布。
+//
+// 两层判据缺一不可：标签形状（只认三段式正式号）+ 资产构成（带自己的校验清单、
+// 且**不带对方的**）。第二层是必须的 —— 发布位里真有过脏数据：
+//   - engine-v3.0.1 里混着 api 的 iptv_amd64 / iptv_arm64 / SHA256SUMS.txt / Version；
+//   - v4.0.1 干脆一个资产都没有。
+//
+// 只看标签就会把它们当候选：轻则"检查更新"报出误导性的版本号（v4.0.1 比线上高
+// 一个中版本，界面会提示"跨大版本、请更新镜像"），重则一路走到下载阶段才报
+// "发布里没有资产 iptv_<arch>"。按资产构成认身份，这类脏数据在挑选阶段就出局。
+func isApiRelease(r *githubRelease) bool {
+	return appTagRe.MatchString(r.TagName) && hasAsset(r, apiSumsName) && !hasAsset(r, engineSumsName)
+}
+
+func isEngineRelease(r *githubRelease) bool {
+	return engineTagRe.MatchString(r.TagName) && hasAsset(r, engineSumsName) && !hasAsset(r, apiSumsName)
+}
+
 func latestAppRelease() (*githubRelease, error) {
-	return fetchLatestStableRelease(func(tag string) bool { return appTagRe.MatchString(tag) })
+	return fetchLatestStableRelease(isApiRelease)
 }
 
 func latestEngineRelease() (*githubRelease, error) {
-	return fetchLatestStableRelease(func(tag string) bool { return engineTagRe.MatchString(tag) })
+	return fetchLatestStableRelease(isEngineRelease)
 }
 
 // 版本比较
@@ -404,11 +452,11 @@ func stageUpdata(rel *githubRelease, assets map[string]string, names []string) (
 func DownloadAndVerifyWeb(arch string) (bool, string, error) {
 	rel, err := latestAppRelease()
 	if err != nil {
-		log.Println("连接Github 检查失败，请检查网络连接")
+		logCheckErr(err)
 		return false, "", err
 	}
 	binary := "iptv_" + arch
-	return stageUpdata(rel, assetURLs(rel), []string{binary, "SHA256SUMS.txt", "iptv"})
+	return stageUpdata(rel, assetURLs(rel), []string{binary, apiSumsName, "iptv"})
 }
 
 // DownloadAndVerifyEngine 下载引擎新版本到待安装区。
@@ -416,23 +464,33 @@ func DownloadAndVerifyWeb(arch string) (bool, string, error) {
 func DownloadAndVerifyEngine(arch string) (bool, string, error) {
 	rel, err := latestEngineRelease()
 	if err != nil {
-		log.Println("连接Github 检查失败，请检查网络连接")
+		logCheckErr(err)
 		return false, "", err
 	}
 	binary := "engine_" + arch
-	return stageUpdata(rel, assetURLs(rel), []string{binary, "SHA256SUMSEngine.txt", "engine"})
+	return stageUpdata(rel, assetURLs(rel), []string{binary, engineSumsName, "engine"})
 }
 
 // DownloadAndVerifyFront 下载前端产物整包到待安装区。
 func DownloadAndVerifyFront() (bool, string, error) {
 	rel, err := latestAppRelease()
 	if err != nil {
-		log.Println("连接Github 检查失败，请检查网络连接")
+		logCheckErr(err)
 		return false, "", err
 	}
 	if assetURLs(rel)[frontAssetName] == "" {
 		return false, "", fmt.Errorf("发布 %s 未提供 %s，请更新镜像", rel.TagName, frontAssetName)
 	}
 	return stageUpdata(rel, assetURLs(rel),
-		[]string{frontAssetName, "SHA256SUMS.txt", frontAssetName})
+		[]string{frontAssetName, apiSumsName, frontAssetName})
+}
+
+// logCheckErr 只对真正的故障打"连接失败"。
+// "列表拉到了、只是没有合格版本"（errNoMatchingRelease）现在成了常见情况 ——
+// 发布位里可能只有脏发布，跳过之后就没有候选了。把它写成"请检查网络连接"
+// 会把人往错的方向带。
+func logCheckErr(err error) {
+	if !errors.Is(err, errNoMatchingRelease) {
+		log.Println("连接Github 检查失败，请检查网络连接")
+	}
 }

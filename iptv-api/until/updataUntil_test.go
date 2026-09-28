@@ -24,6 +24,19 @@ func pageJSON(n int) []byte {
 	return []byte(b.String())
 }
 
+// mkRel 造一条发布记录。at 为空则不设时间；assets 是资产名。
+// 资产构成是判定发布身份的依据（见 isApiRelease），所以测试必须能造出资产组合。
+func mkRel(tag string, pre bool, at string, assets ...string) githubRelease {
+	r := githubRelease{TagName: tag, Prerelease: pre}
+	if at != "" {
+		r.PublishedAt, _ = time.Parse(time.RFC3339, at)
+	}
+	for _, a := range assets {
+		r.Assets = append(r.Assets, releaseAsset{Name: a, BrowserDownloadURL: "https://example.invalid/" + a})
+	}
+	return r
+}
+
 // 在线升级的版本判定
 
 func TestIsNewerPatchOnlyAllowsOnlineUpgrade(t *testing.T) {
@@ -234,17 +247,13 @@ func TestCollectReleasePagesFirstPageError(t *testing.T) {
 // 发布位保留历史后，补发/重跑旧 tag 会让发布时间更晚，按时间挑就会把客户端按回旧版本
 // （症状是"明明发新版了却检查不到更新"）。顺带覆盖前缀过滤与 prerelease 过滤。
 func TestPickLatestStablePicksHighestVersion(t *testing.T) {
-	mk := func(tag string, pre bool, at string) githubRelease {
-		ts, _ := time.Parse(time.RFC3339, at)
-		return githubRelease{TagName: tag, Prerelease: pre, PublishedAt: ts}
-	}
 	list := []githubRelease{
-		mk("v1.2.2", false, "2025-01-01T00:00:00Z"),
-		mk("engine-v9.9.9", false, "2025-06-01T00:00:00Z"), // 前缀不符：不算
-		mk("v1.2.9", true, "2025-07-01T00:00:00Z"),         // 版本最高但是预发布：不算
-		mk("v1.2.1", false, "2025-08-01T00:00:00Z"),        // 时间更晚但版本更旧：不能赢
+		mkRel("v1.2.2", false, "2025-01-01T00:00:00Z", "iptv_amd64", apiSumsName),
+		mkRel("engine-v9.9.9", false, "2025-06-01T00:00:00Z", "engine_amd64", engineSumsName), // 前缀不符：不算
+		mkRel("v1.2.9", true, "2025-07-01T00:00:00Z", "iptv_amd64", apiSumsName),              // 版本最高但预发布：不算
+		mkRel("v1.2.1", false, "2025-08-01T00:00:00Z", "iptv_amd64", apiSumsName),             // 时间更晚但版本更旧
 	}
-	got, err := pickLatestStable(list, func(tag string) bool { return appTagRe.MatchString(tag) })
+	got, err := pickLatestStable(list, isApiRelease)
 	if err != nil {
 		t.Fatalf("应挑出 v1.2.2，实际报错 %v", err)
 	}
@@ -256,16 +265,15 @@ func TestPickLatestStablePicksHighestVersion(t *testing.T) {
 // TestPickLatestStableVersionSortIsNumeric 版本比较必须按数值而不是字符串：
 // v3.10.0 > v3.9.9（字符串序反过来），引擎的 engine-v 前缀也要能正确归一。
 func TestPickLatestStableVersionSortIsNumeric(t *testing.T) {
-	mk := func(tag, at string) githubRelease {
-		ts, _ := time.Parse(time.RFC3339, at)
-		return githubRelease{TagName: tag, PublishedAt: ts}
+	eng := func(tag, at string) githubRelease {
+		return mkRel(tag, false, at, "engine_amd64", "engine_arm", "engine_arm64", engineSumsName)
 	}
 	list := []githubRelease{
-		mk("engine-v3.2.17", "2026-09-20T00:00:00Z"),
-		mk("engine-v3.9.9", "2026-09-01T00:00:00Z"),
-		mk("engine-v3.10.0", "2026-08-01T00:00:00Z"), // 发布时间最早、版本最高
+		eng("engine-v3.2.17", "2026-09-20T00:00:00Z"),
+		eng("engine-v3.9.9", "2026-09-01T00:00:00Z"),
+		eng("engine-v3.10.0", "2026-08-01T00:00:00Z"), // 发布时间最早、版本最高
 	}
-	got, err := pickLatestStable(list, func(tag string) bool { return strings.HasPrefix(tag, engineTagPrefix) })
+	got, err := pickLatestStable(list, isEngineRelease)
 	if err != nil {
 		t.Fatalf("应挑出 engine-v3.10.0，实际报错 %v", err)
 	}
@@ -292,16 +300,103 @@ func TestTagVersionNormalizesPrefixes(t *testing.T) {
 
 // TestPickLatestStableNoMatchIsSentinel 「拉到了列表但一个都不匹配」必须回
 func TestPickLatestStableNoMatchIsSentinel(t *testing.T) {
-	list := []githubRelease{{TagName: "v3.0.2.5"}, {TagName: "v3.0.1.9"}}
-	_, err := pickLatestStable(list, func(tag string) bool { return appTagRe.MatchString(tag) })
+	list := []githubRelease{
+		mkRel("v3.0.2.5", false, "", "iptv_amd64", apiSumsName),
+		mkRel("v3.0.1.9", false, "", "iptv_amd64", apiSumsName),
+	}
+	_, err := pickLatestStable(list, isApiRelease)
 	if err == nil {
 		t.Fatal("没有匹配标签时应报错")
 	}
 	if !errors.Is(err, errNoMatchingRelease) {
 		t.Fatalf("必须是哨兵 errNoMatchingRelease（决定要不要重试代理），实际 %v", err)
 	}
-	if _, err := pickLatestStable(nil, func(string) bool { return true }); !errors.Is(err, errNoMatchingRelease) {
+	if _, err := pickLatestStable(nil, func(*githubRelease) bool { return true }); !errors.Is(err, errNoMatchingRelease) {
 		t.Fatalf("空列表同样应回哨兵，实际 %v", err)
+	}
+}
+
+// TestReleaseIdentityNeedsAssetShape 发布的身份由**资产构成**认定，不只看标签前缀。
+// 发布位里真有过脏数据（2026-09-28 从线上拉取实测）：
+//   - engine-v3.0.1 混着 api 的 iptv_amd64 / iptv_arm64 / SHA256SUMS.txt / Version；
+//   - v4.0.1 一个资产都没有。
+//
+// 只看标签就会把它们当候选：v4.0.1 比线上高一个中版本，界面会提示"跨大版本、请更新
+// 镜像"这种误导性结论；真去下载则报"发布 v4.0.1 里没有资产 iptv_amd64"。
+func TestReleaseIdentityNeedsAssetShape(t *testing.T) {
+	dirtyEngine := mkRel("engine-v3.0.1", false, "",
+		"engine_amd64", "engine_arm", "engine_arm64", engineSumsName,
+		"iptv_amd64", "iptv_arm64", apiSumsName, "Version")
+	emptyApi := mkRel("v4.0.1", false, "")
+	cleanApi := mkRel("v3.1.4", false, "",
+		"iptv_amd64", "iptv_arm", "iptv_arm64", apiSumsName, frontAssetName)
+	cleanEngine := mkRel("engine-v3.2.17", false, "",
+		"engine_amd64", "engine_arm", "engine_arm64", engineSumsName)
+
+	for _, c := range []struct {
+		name string
+		rel  githubRelease
+		fn   func(*githubRelease) bool
+		want bool
+	}{
+		{"混着 api 清单的不能算 api 发布", dirtyEngine, isApiRelease, false},
+		{"混着 api 清单的也不能算引擎发布", dirtyEngine, isEngineRelease, false},
+		{"零资产的不能算 api 发布", emptyApi, isApiRelease, false},
+		{"干净的 api 发布应被认可", cleanApi, isApiRelease, true},
+		{"干净的引擎发布应被认可", cleanEngine, isEngineRelease, true},
+	} {
+		if got := c.fn(&c.rel); got != c.want {
+			t.Fatalf("%s：应 %v，实际 %v", c.name, c.want, got)
+		}
+	}
+
+	// 两个清单名只差一个后缀，必须精确比对，不能互相命中
+	if hasAsset(&cleanEngine, apiSumsName) {
+		t.Fatalf("含 %s 的发布不应命中 %s", engineSumsName, apiSumsName)
+	}
+	if hasAsset(&cleanApi, engineSumsName) {
+		t.Fatalf("含 %s 的发布不应命中 %s", apiSumsName, engineSumsName)
+	}
+}
+
+// TestPickLatestStableSkipsDirtyReleases 脏发布在挑选阶段就出局 ——
+// 版本号最高的空发布不能让"检查更新"报出有新版本。
+func TestPickLatestStableSkipsDirtyReleases(t *testing.T) {
+	list := []githubRelease{
+		mkRel("v4.0.1", false, "2026-09-27T00:00:00Z"), // 零资产，但版本号最高
+		mkRel("v3.1.4", false, "2026-09-26T00:00:00Z",
+			"iptv_amd64", "iptv_arm", "iptv_arm64", apiSumsName, frontAssetName),
+	}
+	got, err := pickLatestStable(list, isApiRelease)
+	if err != nil {
+		t.Fatalf("应跳过空资产的 v4.0.1，实际报错 %v", err)
+	}
+	if got.TagName != "v3.1.4" {
+		t.Fatalf("应挑出 v3.1.4，实际 %s", got.TagName)
+	}
+
+	// 全是脏发布时回哨兵：调用方据此显示"当前已是最新版本"，而不是报出 v4.0.1
+	only := []githubRelease{mkRel("v4.0.1", false, "")}
+	if _, err := pickLatestStable(only, isApiRelease); !errors.Is(err, errNoMatchingRelease) {
+		t.Fatalf("只有脏发布时应回哨兵，实际 %v", err)
+	}
+}
+
+// TestIsMytvBaseReleaseRequiresContractAssets 基底发布的两个契约资产必须同时在场。
+func TestIsMytvBaseReleaseRequiresContractAssets(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		rel  githubRelease
+		want bool
+	}{
+		{"两个契约资产齐全", mkRel("mytv-v1.2.3", false, "", mytvBaseAsset, mytvVersionAsset), true},
+		{"只有 APK", mkRel("mytv-v1.2.3", false, "", mytvBaseAsset), false},
+		{"只有版本号文件", mkRel("mytv-v1.2.3", false, "", mytvVersionAsset), false},
+		{"标签是别家的序列", mkRel("engine-v3.2.17", false, "", "engine_amd64", engineSumsName), false},
+	} {
+		if got := isMytvBaseRelease(&c.rel); got != c.want {
+			t.Fatalf("%s：应 %v，实际 %v", c.name, c.want, got)
+		}
 	}
 }
 

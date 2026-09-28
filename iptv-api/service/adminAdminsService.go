@@ -125,10 +125,19 @@ func UpdataCheckEngine() dto.ReturnJsonDto {
 	return dto.ReturnJsonDto{Code: 2, Msg: "当前已是最新版本", Type: "success"}
 }
 
+// downErrDto 把"没有合格版本"与真故障分开：前者对用户就是"已是最新"（发布位里可能
+// 只有脏发布，跳过之后就没有候选了），用 danger 等于把正常的版本盘点说成下载故障。
+func downErrDto(err error) dto.ReturnJsonDto {
+	if until.IsNoMatchingRelease(err) {
+		return dto.ReturnJsonDto{Code: 2, Msg: "当前已是最新版本", Type: "success"}
+	}
+	return dto.ReturnJsonDto{Code: 0, Msg: "下载失败: " + err.Error(), Type: "danger"}
+}
+
 func UpdataDownWeb() dto.ReturnJsonDto {
 	up, newWeb, err := until.DownloadAndVerifyWeb(runtime.GOARCH)
 	if err != nil {
-		return dto.ReturnJsonDto{Code: 0, Msg: "下载失败: " + err.Error(), Type: "danger"}
+		return downErrDto(err)
 	}
 	if up {
 		return dto.ReturnJsonDto{Code: 1, Msg: "管理系统新版本: " + newWeb, Type: "success"}
@@ -140,7 +149,7 @@ func UpdataDownEngine() dto.ReturnJsonDto {
 	// 同上：这里是引擎版本号，不是授权信息。
 	up, newVer, err := until.DownloadAndVerifyEngine(runtime.GOARCH)
 	if err != nil {
-		return dto.ReturnJsonDto{Code: 0, Msg: "下载失败: " + err.Error(), Type: "danger"}
+		return downErrDto(err)
 	}
 	if up {
 		return dto.ReturnJsonDto{Code: 1, Msg: "引擎新版本: " + newVer, Type: "success"}
@@ -152,7 +161,7 @@ func UpdataDownEngine() dto.ReturnJsonDto {
 func UpdataDownFront() dto.ReturnJsonDto {
 	up, newVer, err := until.DownloadAndVerifyFront()
 	if err != nil {
-		return dto.ReturnJsonDto{Code: 0, Msg: "下载失败: " + err.Error(), Type: "danger"}
+		return downErrDto(err)
 	}
 	if up {
 		return dto.ReturnJsonDto{Code: 1, Msg: "前端新版本: " + newVer, Type: "success"}
