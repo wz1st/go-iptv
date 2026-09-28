@@ -1,0 +1,138 @@
+# syntax=docker/dockerfile:1
+# 本地产物组装版：CI 与离线构建用，iptv_all / engine_all / start_all / webdist 必须先在本地编好。
+
+# 全局 ARG 必须在第一个 FROM 之前声明，FROM 之后的同名 ARG 才能继承默认值。
+ARG APK_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
+
+
+# 运行镜像（与在线下载版 Dockerfile 的阶段 2 逐条一致，只差产物来源）
+FROM alpine:latest
+
+ARG APK_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
+
+ENV TZ=Asia/Shanghai
+ENV ANDROID_HOME=/opt/android-sdk
+ENV ANDROID_SDK_ROOT=/opt/android-sdk
+
+WORKDIR /app
+VOLUME /config
+
+# 80 -> nginx：前端静态站点 + 后端接口代理 + 中转（/p/），对外唯一入口
+EXPOSE 80
+
+# ---- 随镜像带入的编译基底与资源 ----
+COPY apktool/apktool apktool/apktool.jar /usr/bin/
+COPY client /client
+COPY database /app/database
+COPY logo /app/logo
+# mytv 编译基底（已入库）：引擎按它反编译改包，不再从 api 下载
+COPY mytv /app/mytv
+
+# ---- 包源 / 运行时依赖 / APK 工具链压在同一层：同层内「装 -> 抽 -> 裁 -> 卸」，jmods 与 build-tools 的 LLVM/renderscript 系（约 194MB）因此不进镜像 ----
+# 不装 zip：Alpine 的 zip 依赖 unzip，装了它 `apk del unzip` 就只是空转（rc=0 但不卸），而运行时并不需要 zip。
+RUN sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#${APK_MIRROR}#g" /etc/apk/repositories \
+ && apk add --no-cache \
+        openjdk17 \
+        bash \
+        curl \
+        wget \
+        unzip \
+        ffmpeg \
+        sqlite \
+        nginx \
+        libc6-compat \
+        libstdc++ \
+        tzdata \
+ && cp /usr/share/zoneinfo/${TZ} /etc/localtime \
+ && echo ${TZ} > /etc/timezone \
+ && mkdir -p /var/log/nginx /var/lib/nginx/tmp /run \
+ && rm -rf /usr/lib/jvm/java-17-openjdk/jmods \
+           /usr/lib/jvm/java-17-openjdk/demo \
+           /usr/lib/jvm/java-17-openjdk/man \
+           /usr/lib/jvm/java-17-openjdk/include \
+ && curl -fsSL -o /tmp/bt.zip \
+      https://dl.google.com/android/repository/build-tools_r33.0.2-linux.zip \
+ && mkdir -p ${ANDROID_HOME}/build-tools \
+ && unzip -q /tmp/bt.zip -d /tmp/bt \
+ && mv /tmp/bt/android-13/* ${ANDROID_HOME}/build-tools/ \
+ && rm -rf /tmp/bt* \
+ && apk del unzip \
+ && rm -rf ${ANDROID_HOME}/build-tools/lld-bin \
+           ${ANDROID_HOME}/build-tools/renderscript \
+           ${ANDROID_HOME}/build-tools/aidl \
+           ${ANDROID_HOME}/build-tools/dexdump \
+           ${ANDROID_HOME}/build-tools/llvm-rs-cc \
+           ${ANDROID_HOME}/build-tools/split-select \
+           ${ANDROID_HOME}/build-tools/lld \
+           ${ANDROID_HOME}/build-tools/bcc_compat \
+           ${ANDROID_HOME}/build-tools/aarch64-linux-android-ld \
+           ${ANDROID_HOME}/build-tools/arm-linux-androideabi-ld \
+           ${ANDROID_HOME}/build-tools/i686-linux-android-ld \
+           ${ANDROID_HOME}/build-tools/mipsel-linux-android-ld \
+           ${ANDROID_HOME}/build-tools/x86_64-linux-android-ld \
+ && rm -f  ${ANDROID_HOME}/build-tools/lib64/libLLVM_android.so \
+           ${ANDROID_HOME}/build-tools/lib64/libclang_android.so \
+           ${ANDROID_HOME}/build-tools/lib64/libbcc.so \
+           ${ANDROID_HOME}/build-tools/lib64/libbcinfo.so \
+ && ln -s ${ANDROID_HOME}/build-tools/apksigner /usr/local/bin/apksigner \
+ && ln -s ${ANDROID_HOME}/build-tools/zipalign /usr/local/bin/zipalign \
+ && sed -i 's/\r$//' /usr/bin/apktool \
+ && chmod +x /usr/bin/apktool /usr/bin/apktool.jar
+
+# nginx 配置（worker 以 nginx 用户运行，见配置文件头）
+COPY nginx/nginx.conf /etc/nginx/nginx.conf
+COPY nginx/proxy_params.inc /etc/nginx/conf.d/proxy_params.inc
+
+# 运行时资源
+COPY config.yml README.md dictionary.txt alias.json ChangeLog.md keystore.p12 /app/
+
+# 三个可执行文件：--chmod 直接带可执行位，省掉 chmod 再复制一层的开销（~58MB）
+ARG TARGETARCH=amd64
+
+# 不支持的架构要停在构建期，比 COPY 抛的 file not found 直白
+RUN case "${TARGETARCH}" in \
+        amd64|arm|arm64) echo "目标架构: ${TARGETARCH}" ;; \
+        *) echo "FATAL: 不支持的架构 ${TARGETARCH}（仅 amd64 / arm / arm64 有产物）" >&2; exit 1 ;; \
+    esac
+
+COPY --chmod=0755 iptv_all/iptv_${TARGETARCH} /app/iptv
+COPY --chmod=0755 engine_all/engine_${TARGETARCH} /app/engine
+COPY --chmod=0755 start_all/start_${TARGETARCH} /app/start
+
+# 前端静态站点
+ARG APP_VERSION=""
+COPY webdist /app/web
+
+# 收口自检：工具链可用 + 产物齐全 + 前端版本标记一致 + nginx 配置合法
+RUN nginx -t -c /etc/nginx/nginx.conf \
+ && apktool --version \
+ && test -x "${ANDROID_HOME}/build-tools/aapt2" \
+ && "${ANDROID_HOME}/build-tools/aapt2" version \
+ && apksigner --version \
+ && java -version \
+ && { jarsigner -help >/dev/null 2>&1; true; } \
+ && { keytool -help >/dev/null 2>&1; true; } \
+ && { zipalign >/dev/null 2>&1; true; } \
+ && test -f /app/web/index.html \
+        || (echo "FATAL: 前端产物缺少 index.html，请先构建 iptv-web" >&2; exit 1) \
+ && if [ -n "${APP_VERSION}" ]; then \
+      grep -q "name=\"app-version\" content=\"${APP_VERSION}\"" /app/web/index.html \
+        || { echo "FATAL: 前端产物内的版本标记与 APP_VERSION=${APP_VERSION} 不一致" >&2; \
+             echo "       产物里实际是：$(grep -o 'name="app-version"[^>]*' /app/web/index.html)" >&2; \
+             echo "       请用 APP_VERSION=${APP_VERSION} 重新构建 iptv-web" >&2; exit 1; }; \
+      echo "==== 前端版本标记校验通过: ${APP_VERSION} ===="; \
+    else \
+      echo "==== 未传 APP_VERSION，跳过前端版本标记校验 ===="; \
+    fi \
+ && test -f /app/mytv/MyTV.apk \
+ && ls -l /app/iptv /app/engine /app/start \
+ && for f in /app/iptv /app/engine /app/start; do test -x "$f" || { echo "FATAL: $f 不可执行" >&2; exit 1; }; done
+
+# Go 运行时内存软上限
+ENV GOMEMLIMIT=1GiB
+
+# 健康检查：探 /version 而不是 /admin/login
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -qO- http://127.0.0.1/version >/dev/null 2>&1 || exit 1
+
+CMD ["./start"]

@@ -1,0 +1,30 @@
+# go-iptv 组装仓的忽略规则。
+
+# ---- 编译 / 打包产物 ----
+/iptv_all/
+/engine_all/
+/start_all/
+/webdist/
+/start
+/Version
+# mytv 客户端底包（MyTV.apk）与基底版本号随仓入库，保证 clone 后即可构建；只忽略 CI 产出的校验文件。
+/mytv/SHA256SUMSMytv.txt
+
+# ---- CI 拉取的其它仓库源码（构建期临时目录）----
+/web-src/
+/start-src/
+/engine-src/
+
+# ---- 本地构建工具与会话数据 ----
+# .deploy/ 里有构建机地址与口令，本仓是公开仓库，绝不能提交。
+/.deploy/
+/.workbuddy/
+/.webdist_stale/
+
+# ---- 编辑器 / 系统垃圾 ----
+.idea/
+.vscode/
+*.log
+*.tmp
+Thumbs.db
+.DS_Store

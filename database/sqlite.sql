@@ -3,7 +3,7 @@ BEGIN TRANSACTION;
 CREATE TABLE iptv_admin (
     id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
     username TEXT NOT NULL,
-    password TEXT NOT NULL
+    password_hash TEXT NOT NULL
 );
 
 CREATE TABLE iptv_category (
@@ -16,9 +16,9 @@ CREATE TABLE iptv_category (
     ku9 TEXT,
     sort INTEGER,
     rules TEXT,
-    rename INTEGER DEFAULT 1,
-    list_id INTEGER DEFAULT 0,
-    rawcount INTEGER DEFAULT 0
+    auto_rename INTEGER DEFAULT 1,
+    source_id INTEGER DEFAULT 0,
+    raw_count INTEGER DEFAULT 0
 );
 
 CREATE TABLE iptv_category_list (
@@ -27,12 +27,12 @@ CREATE TABLE iptv_category_list (
     enable INTEGER NOT NULL DEFAULT 1,
     url TEXT DEFAULT NULL,
     ua TEXT,
-    rename INTEGER DEFAULT 1,
-    autogroup INTEGER DEFAULT 0,
+    auto_rename INTEGER DEFAULT 1,
+    auto_group INTEGER DEFAULT 0,
     ku9 INTEGER DEFAULT 0,
-    autocategory INTEGER DEFAULT 0,
-    latesttime TEXT DEFAULT NULL,
-    repeat INTEGER DEFAULT 0
+    auto_category INTEGER DEFAULT 0,
+    latest_time TEXT DEFAULT NULL,
+    dedup INTEGER DEFAULT 0
 );
 
 CREATE TABLE iptv_channels (
@@ -44,9 +44,9 @@ CREATE TABLE iptv_channels (
     res_time INTEGER,
     speed TEXT,
     status INTEGER NOT NULL DEFAULT 1,
-    e_id INTEGER DEFAULT 0,
-    c_id INTEGER DEFAULT 0,
-    list_id INTEGER DEFAULT 0
+    epg_id INTEGER DEFAULT 0,
+    category_id INTEGER DEFAULT 0,
+    source_id INTEGER DEFAULT 0
 );
 
 CREATE TABLE iptv_epg_list (
@@ -55,7 +55,7 @@ CREATE TABLE iptv_epg_list (
     url TEXT DEFAULT NULL,
     status INTEGER NOT NULL DEFAULT 1,
     ua TEXT,
-    lasttime BIGINT NOT NULL,
+    last_time BIGINT NOT NULL,
     remarks TEXT DEFAULT NULL
 );
 INSERT INTO iptv_epg_list VALUES(1,'51zmt','http://epg.51zmt.top:8000/e.xml',1,'',0,'51zmt');
@@ -64,7 +64,7 @@ CREATE TABLE iptv_epg (
     id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
     name TEXT NOT NULL,
     content TEXT DEFAULT NULL,
-    fromlist TEXT,
+    from_list TEXT,
     cas TEXT,
     status INTEGER NOT NULL DEFAULT 1,
     remarks TEXT DEFAULT NULL
@@ -100,19 +100,19 @@ CREATE TABLE iptv_users (
     id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
     name BIGINT NOT NULL,
     mac TEXT NOT NULL,
-    deviceid TEXT NOT NULL,
+    device_id TEXT NOT NULL,
     model TEXT NOT NULL,
     ip TEXT NOT NULL,
     region TEXT DEFAULT NULL,
-    exp BIGINT NOT NULL,
+    expire_time BIGINT NOT NULL,
     vpn INTEGER NOT NULL DEFAULT 0,
-    idchange INTEGER NOT NULL DEFAULT 0,
+    id_change INTEGER NOT NULL DEFAULT 0,
     author TEXT DEFAULT NULL,
-    authortime BIGINT NOT NULL DEFAULT 0,
+    author_time BIGINT NOT NULL DEFAULT 0,
     status INTEGER NOT NULL DEFAULT -1,
-    lasttime BIGINT NOT NULL,
+    last_time BIGINT NOT NULL,
     marks TEXT DEFAULT NULL,
-    meal INTEGER NOT NULL DEFAULT 1000
+    meal_id INTEGER NOT NULL DEFAULT 1000
 );
 
 CREATE TABLE short_url (
@@ -121,5 +121,10 @@ CREATE TABLE short_url (
     key TEXT NOT NULL
 );
 
+-- iptv_movie：点播数据源表。
+-- 管理端的「点播管理」模块已移除（不再有建表/读写它的 Go 代码），
+-- 但这里刻意保留建表语句：已部署的实例卷里可能还有历史数据，
+-- 删表属于不可逆的数据销毁，不应由一次功能下线来触发。
+-- 新装实例会建出一张永远为空的表，代价可忽略。
 CREATE TABLE IF NOT EXISTS "iptv_movie"  (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,`name` text,api TEXT DEFAULT NULL,`state` integer);
 COMMIT;

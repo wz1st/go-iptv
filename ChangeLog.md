@@ -267,7 +267,7 @@
 ## 打赏
 >如果觉得好用，请打赏支持一下
 
-<div style="display: flex; justify-content: center; gap: 50px;" id="install-show">
+<div class="pay-qr" id="install-show">
   <img src="./static/images/wxpay.jpg" alt="微信" width="300">
   <img src="./static/images/zfbpay.jpg" alt="支付宝" width="300">
 </div>

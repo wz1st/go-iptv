@@ -1,0 +1,12 @@
+# .gitattributes —— 行尾策略
+
+# apktool
+apktool/apktool     text eol=lf
+
+# apktool.jar 是 zip 包，必须按二进制处理 ——
+# 被当成文本做换行转换会直接损坏文件。
+apktool/apktool.jar binary
+
+# nginx 配置
+nginx/nginx.conf       text eol=lf
+nginx/proxy_params.inc text eol=lf

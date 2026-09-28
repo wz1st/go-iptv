@@ -1,112 +1,354 @@
-name: Build and Push Docker Image
+name: 构建镜像并发布
 
+# 触发：推送三段版本号标签 vX.Y.Z（可带 -beta 后缀做预发布）
 on:
   push:
     tags:
-      - '*'
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（vX.Y.Z）'
+        required: true
 
 permissions:
   contents: write
 
+# 同一 ref 重复触发时排队而非并行；进行中的发版绝不取消，半路取消会留下只有镜像没有 release 的残局
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.25'
+  NODE_VERSION: '22'
+  GOPROXY: https://goproxy.cn,direct
+  GOSUMDB: sum.golang.google.cn
+  TARGET_PLATFORMS: linux/amd64,linux/arm/v7,linux/arm64
+  WEB_REPO: wz1st/iptv-web
+  START_REPO: wz1st/iptv-start
+
+# 四个组件互不依赖，拆成 4 个 job 并行；最后由 image job 汇总产物、发 release、推镜像。
+# 引擎是个例外：不在本工作流编译，只消费 iptv-engine 已发布的 release（见 engine job）。
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      prerelease: ${{ steps.parse.outputs.prerelease }}
     steps:
-      - name: Checkout source repo
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-
-      - name: Detect tag and update version
-        id: vars
+      # api 的版本号 = 镜像 tag = 本仓 release tag，三者必须同一个值
+      - name: 解析版本号
+        id: parse
         run: |
-          TAG_NAME="${GITHUB_REF#refs/tags/}"
-          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "Detected tag: $TAG_NAME"
-
-          sed -i "s/var Version = \".*\"/var Version = \"${TAG_NAME}\"/" until/versionUntil.go
-          echo "Updated Version -> ${TAG_NAME}"
-
-          # 判断是否包含 beta
-          if [[ "$TAG_NAME" == *beta* ]]; then
-            echo "archs=amd64" >> $GITHUB_OUTPUT
+          set -e
+          V="${{ github.event.inputs.version || github.ref_name }}"
+          case "$V" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::版本号必须是三段式 vX.Y.Z（收到 $V）"; exit 1 ;;
+          esac
+          echo "version=$V" >> $GITHUB_OUTPUT
+          if [ "$V" != "${V%-*}" ]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
           else
-            echo "archs=amd64,arm64" >> $GITHUB_OUTPUT
+            echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build binaries
+  # iptv-web（公开仓）→ webdist/，纯静态站点由 nginx 直出
+  web:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.WEB_REPO }}
+          path: web-src
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web-src/package-lock.json
+      # APP_VERSION 由 vite.config.js 的 injectAppVersion 插件写进 index.html
+      - name: 构建前端
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          go mod download
-          mkdir -p iptv_dist
-          IFS=',' read -ra ARCHS <<< "${{ steps.vars.outputs.archs }}"
-          for ARCH in "${ARCHS[@]}"; do
-            echo "Building for $ARCH..."
-            CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH go build -ldflags "-s -w" -o iptv_dist/iptv_${ARCH} main.go
+          set -e
+          cd web-src
+          npm ci
+          npm run build
+          test -f dist/index.html || { echo "::error::前端产物缺少 index.html"; exit 1; }
+          grep -q "name=\"app-version\" content=\"$APP_VERSION\"" dist/index.html \
+            || { echo "::error::前端产物里没有预期的版本标记（APP_VERSION=$APP_VERSION）"; exit 1; }
+          rm -rf ../webdist
+          mv dist ../webdist
+          ls -la ../webdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webdist
+          path: webdist
+          if-no-files-found: error
+          retention-days: 3
+
+  # iptv-start（公开仓）→ start_all/start_<arch>
+  start:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.START_REPO }}
+          path: start-src
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: start-src/go.sum
+      - name: 构建启动器（amd64 / armv7 / armv8）
+        run: |
+          set -e
+          cd start-src
+          gofmt -l . | tee /tmp/fmt-start
+          [ ! -s /tmp/fmt-start ] || { echo "::error::启动器 gofmt 未通过"; exit 1; }
+          go vet ./...
+          go test ./... -count=1
+          mkdir -p ../start_all
+          for a in amd64 arm arm64; do
+            echo ">> start $a"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$a" GOARM=7 \
+              go build -ldflags '-s -w' -o "../start_all/start_$a" .
           done
-          ls -lh iptv_dist/
-      
-      - name: Login to Docker Hub
+          ls -l ../start_all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: start_all
+          path: start_all
+          if-no-files-found: error
+          retention-days: 3
+
+  # iptv-api（本仓）→ iptv_all/，gofmt / vet / test 不过就不出产物
+  app:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: iptv-api/go.sum
+      - name: 构建 iptv-api（amd64 / armv7 / armv8）
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -e
+          cd iptv-api
+          gofmt -l . | tee /tmp/fmt-api
+          [ ! -s /tmp/fmt-api ] || { echo "::error::iptv-api gofmt 未通过"; exit 1; }
+          go vet ./...
+          go test ./... -count=1
+          mkdir -p ../iptv_all
+          for a in amd64 arm arm64; do
+            echo ">> iptv-api $a"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$a" \
+              go build -ldflags "-s -w -X iptv-api/until.Version=$VERSION" \
+              -o "../iptv_all/iptv_$a" main.go
+          done
+          # 立刻验证注入生效：ldflags 路径写错时症状只是"版本号显示成源码默认值"，很晚才会被发现
+          ../iptv_all/iptv_amd64 -version | grep -qx "$VERSION" \
+            || { echo "::error::iptv 二进制报告的版本不是 $VERSION"; ../iptv_all/iptv_amd64 -version; exit 1; }
+          ls -l ../iptv_all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iptv_all
+          path: iptv_all
+          if-no-files-found: error
+          retention-days: 3
+
+  # iptv-engine（私有仓）→ engine_all/。
+  # 引擎的**唯一发布者**是引擎仓自己的 CI（推 vX.Y.Z tag → 发 engine-vX.Y.Z release），
+  # 本工作流只按版本号取最高的一版，避免两处都往同一个发布位写、互相覆盖出旧版本。
+  # 发布位保留历史（不清理）：旧版 api 可能正指着旧引擎，删掉就等于打断它的升级路径。
+  engine:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # 版本号取自 release 标签（iptv-api 的 CheckNewVerEngine 也按同一前缀取），
+      # 所以必须过滤 prerelease，否则预发布版会被当成"最新引擎"。
+      # 而且发布位**保留历史**，补发/重跑旧 tag 会让"发布最晚"≠"版本最高"，
+      # 因此按版本号三段数值排序取最大，不看 created_at。
+      - name: 找最新稳定引擎 release
+        id: rel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          # 末尾 tr 不能省：gh 的 --jq 按 JSON 输出字符串（带双引号），
+          # 带着引号去 gh release download 会直接失败（找不到资产）。
+          # \r 一并删：CR 混进 tag 会让 download 拼出一个不存在的标签。
+          TAG=$(gh api --paginate --slurp "repos/$REPO/releases?per_page=100" \
+            --jq 'add
+                  | [.[] | select((.prerelease|not) and (.tag_name|test("^engine-v[0-9]+\\.[0-9]+\\.[0-9]+$")))]
+                  | sort_by(.tag_name | ltrimstr("engine-v") | split(".") | map(tonumber))
+                  | last | .tag_name // ""' \
+            | tr -d '"\r')
+          [ -n "$TAG" ] || { echo "::error::本仓还没有稳定引擎 release（engine-vX.Y.Z）。请先在 iptv-engine 推一个 vX.Y.Z 标签，让引擎仓的 CI 发布"; exit 1; }
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "使用引擎 release：$TAG"
+
+      # 清单校验 + 三架构齐全一起断言：镜像的 TARGET_PLATFORMS 是三个平台，
+      # 少一份产物会在 buildx 那步才炸，代价比这里大得多。
+      - name: 下载并校验引擎产物
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          set -e
+          mkdir -p engine_all
+          gh release download "$TAG" --repo "$REPO" --dir engine_all \
+            --pattern 'engine_*' --pattern 'SHA256SUMSEngine.txt' --clobber
+          ls -l engine_all
+          ( cd engine_all && sha256sum -c SHA256SUMSEngine.txt )
+          for a in amd64 arm arm64; do
+            test -f "engine_all/engine_$a" \
+              || { echo "::error::$TAG 里缺少 engine_$a，镜像需要三架构齐全"; exit 1; }
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine_all
+          path: engine_all
+          if-no-files-found: error
+          retention-days: 3
+
+  # 汇总四个 job 的产物 → 发 release → 推镜像；release 先于镜像，产物才是真源
+  image:
+    needs: [prepare, web, start, app, engine]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # 构建产物分散在四个 runner 上，只能靠 artifact 收回来
+      - uses: actions/download-artifact@v4
+        with:
+          name: webdist
+          path: webdist
+      - uses: actions/download-artifact@v4
+        with:
+          name: iptv_all
+          path: iptv_all
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine_all
+          path: engine_all
+      - uses: actions/download-artifact@v4
+        with:
+          name: start_all
+          path: start_all
+
+      # 校验清单的文件名必须与 iptv-api/until/updataUntil.go 里查的逐字一致
+      - name: 生成前端整包与校验清单
+        run: |
+          set -e
+          ls -l iptv_all engine_all start_all
+          # 引擎版本号问产物自己，只校验形状；发布位与版本的一致性由引擎仓 CI 负责
+          ENG=$(./engine_all/engine_amd64 -version | tr -d '\r')
+          echo "引擎版本：$ENG"
+          case "$ENG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::引擎 -version 输出不是三段版本号：$ENG"; exit 1 ;;
+          esac
+
+          tar -czf iptv_all/webdist.tar.gz webdist
+          tar -tzf iptv_all/webdist.tar.gz | head -5
+
+          ( cd iptv_all   && sha256sum iptv_amd64 iptv_arm iptv_arm64 webdist.tar.gz > SHA256SUMS.txt )
+          ( cd engine_all && sha256sum engine_amd64 engine_arm engine_arm64 > SHA256SUMSEngine.txt )
+          cat iptv_all/SHA256SUMS.txt engine_all/SHA256SUMSEngine.txt
+
+      # 发布：api 到本仓 releases。引擎不在这里发 —— 它的发布位（engine-vX.Y.Z）由
+      # iptv-engine 的 CI 维护，两处都发会让旧版本把新版本顶回去（版本号取自标签）。
+      - name: 发布 api 到 go-iptv releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.version }}
+          name: Release ${{ needs.prepare.outputs.version }}
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          overwrite_files: true
+          files: iptv_all/*
+
+      # 前端与启动器的源码不在本仓，各自回源码仓留一份 release（未配令牌则跳过）
+      - name: 探测跨仓发布令牌
+        run: |
+          if [ -n "${{ secrets.OTHER_REPO_TOKEN }}" ]; then
+            echo "OTHER_REPO_TOKEN_PRESENT=true" >> $GITHUB_ENV
+          else
+            echo "未配置 OTHER_REPO_TOKEN，跳过前端/启动器发布"
+          fi
+
+      - name: 发布前端到 iptv-web releases
+        if: ${{ env.OTHER_REPO_TOKEN_PRESENT == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.OTHER_REPO_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh release view "$VERSION" --repo "$WEB_REPO" >/dev/null 2>&1 \
+            || gh release create "$VERSION" --repo "$WEB_REPO" \
+                 --title "$VERSION" --notes "前端产物 $VERSION"
+          gh release upload "$VERSION" iptv_all/webdist.tar.gz --repo "$WEB_REPO" --clobber
+
+      - name: 发布启动器到 iptv-start releases
+        if: ${{ env.OTHER_REPO_TOKEN_PRESENT == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.OTHER_REPO_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh release view "$VERSION" --repo "$START_REPO" >/dev/null 2>&1 \
+            || gh release create "$VERSION" --repo "$START_REPO" \
+                 --title "$VERSION" --notes "启动器产物 $VERSION"
+          gh release upload "$VERSION" \
+            start_all/start_amd64 start_all/start_arm start_all/start_arm64 \
+            --repo "$START_REPO" --clobber
+
+      - name: 登录镜像仓库
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Set up Docker Buildx
+      - name: 准备 Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Extract tag version
-        run: echo "IMAGE_VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
-
-      - name: Write version to file
-        run: echo "${{ env.IMAGE_VERSION }}" > Version
-
-
-      # ---正式版---
-      - name: Build and Push (with latest)
-        if: ${{ !contains(env.IMAGE_VERSION, 'beta') }}
+      # armv7 的 TARGETARCH 是 arm；关 provenance/sbom 免清单膨胀；开 GHA 层缓存复用 apk 与 build-tools（130MB）那一大层
+      - name: 构建并推送多架构镜像
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
+          file: ./Dockerfile.web
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ env.TARGET_PLATFORMS }}
+          provenance: false
+          sbom: false
+          build-args: |
+            APP_VERSION=${{ needs.prepare.outputs.version }}
           tags: |
+            ${{ secrets.DOCKER_USERNAME }}/iptv:${{ needs.prepare.outputs.version }}
             ${{ secrets.DOCKER_USERNAME }}/iptv:latest
-            ${{ secrets.DOCKER_USERNAME }}/iptv:${{ env.IMAGE_VERSION }}
+          cache-from: type=gha,scope=iptv-image
+          cache-to: type=gha,scope=iptv-image,mode=max
 
-      # ---beta---
-      - name: Build and Push (beta only)
-        if: ${{ contains(env.IMAGE_VERSION, 'beta') }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          platforms: linux/amd64
-          tags: |
-            ${{ secrets.DOCKER_USERNAME }}/iptv:${{ env.IMAGE_VERSION }}
-
-      # ---生成 SHA256---
-      - name: Generate SHA256
+      # 推完立刻在远端清单上确认三架构都在，别等用户拉不到才发现
+      - name: 校验镜像清单
         run: |
-          (cd iptv_dist && sha256sum * > SHA256SUMS.txt)
-          cp Version iptv_dist/
-
-
-      # ---创建或更新 Release---
-      - name: Create/Update Release and Upload Assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.IMAGE_VERSION }}
-          name: Release ${{ env.IMAGE_VERSION }}
-          prerelease: ${{ contains(env.IMAGE_VERSION, 'beta') }}
-          generate_release_notes: true
-          overwrite_files: true
-          files: iptv_dist/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          set -e
+          docker buildx imagetools inspect \
+            ${{ secrets.DOCKER_USERNAME }}/iptv:${{ needs.prepare.outputs.version }} | tee /tmp/mi.txt
+          for p in linux/amd64 linux/arm/v7 linux/arm64; do
+            grep -q "$p" /tmp/mi.txt || { echo "::error::镜像清单里没有 $p"; exit 1; }
+          done

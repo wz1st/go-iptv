@@ -1,0 +1,29 @@
+# .gitattributes —— 统一 LF 行尾
+
+# 文本文件一律 LF 进出（二进制由 git 自动识别）
+* text=auto eol=lf
+
+# ---- 明确标记为二进制 ----
+# 被当成文本做换行转换会直接损坏文件。
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.webp    binary
+*.ico     binary
+*.svg     text eol=lf
+*.woff    binary
+*.woff2   binary
+*.ttf     binary
+*.eot     binary
+*.apk     binary
+*.jar     binary
+*.zip     binary
+*.gz      binary
+*.p12     binary
+*.keystore binary
+*.db      binary
+
+# Windows 批处理必须保留 CRLF
+*.bat     text eol=crlf
+*.cmd     text eol=crlf

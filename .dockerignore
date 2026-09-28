@@ -1,8 +1,28 @@
+# Dockerfile 与 Dockerfile.web 共用的构建上下文排除项。
+
 .git
 .gitignore
+
+# 本地工具与临时产物
+.deploy
+.workbuddy
+.webdist_stale
 *.log
 *.tmp
+.swp
+
+# 编辑器 / 系统垃圾
+.idea
+.vscode
+Thumbs.db
+.DS_Store
+
+# 依赖目录（组装层不装任何依赖，真出现说明是误提交）
 node_modules
 vendor
-dist
-build
+
+# 源码目录：不进构建上下文（镜像只装结果文件）。
+iptv-api
+engine-src
+web-src
+start-src

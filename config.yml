@@ -1,8 +1,6 @@
 server_url: http://10.10.220.161
 build:
     name: 清和电视
-    package: cn.v1st.player
-    sign: 12315
     version: "1.0"
 app:
     needauthor: 0
@@ -10,7 +8,6 @@ app:
     decoder: 0
     update:
         set: 0
-        text: 更新内容
 tips:
     loading: 正在连接，请稍后 ...
     user_expired: 账号已到期
@@ -20,16 +17,10 @@ ad:
     showtime: 120
     showinterval: 5
     adtext: 本IPTV系统仅用于个人非商业用途，任何使用本系统的用户需自行承担风险。使用本系统可能会涉及到访问第三方资源，包括但不限于通过互联网获取的流媒体内容、频道列表等。我们无法控制这些第三方资源的可用性、质量、安全性或合法性。我们不对使用本系统产生的任何损失、损害或法律责任承担责任。使用者必须自行判断并承担使用本系统所带来的风险。在使用本系统之前，请确保您已获得了相关法律法规和版权所有者的许可。
-channel:
-    interval: 1
-    auto: 1
 rss:
     key: ''
 proxy:
-    scheme: http
-    addr: ''
     status: 0
-    port: 8080
 resolution:
   auto: 0
   disch: 0
