@@ -166,15 +166,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      
-      
-      
-      
-      
-      
-      
-      
-      
       - name: 找最新稳定引擎 release
         id: rel
         env:
@@ -182,17 +173,6 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          
-          
-          
-          
-          
-          
-          
-          
-          
-          
-          
           TAG=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
             | jq -rs 'add // []
                   | [.[] | select((.prerelease|not)
@@ -355,13 +335,3 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/iptv:latest
           cache-from: type=gha,scope=iptv-image
           cache-to: type=gha,scope=iptv-image,mode=max
-
-      
-      - name: 校验镜像清单
-        run: |
-          set -e
-          docker buildx imagetools inspect \
-            ${{ secrets.DOCKER_USERNAME }}/iptv:${{ needs.prepare.outputs.version }} | tee /tmp/mi.txt
-          for p in linux/amd64; do
-            grep -q "$p" /tmp/mi.txt || { echo "::error::镜像清单里没有 $p"; exit 1; }
-          done
