@@ -88,13 +88,12 @@ MACH="${TARGETARCH:-}"
 if [ -z "$MACH" ]; then
   case "$(uname -m)" in
     x86_64) MACH=amd64 ;;
-    aarch64) MACH=arm64 ;;
+    *) fail "$(uname -m) 不是 x86_64：本包只发 amd64" ;;
   esac
 fi
 case "${MACH}${TARGETVARIANT:-}" in
   amd64) ARCH=amd64; EM=62 ;;
-  arm64) ARCH=arm64; EM=183 ;;
-  *) fail "不支持的架构 TARGETARCH=${MACH} TARGETVARIANT=${TARGETVARIANT:-}（发布资产只有 amd64 / arm64）" ;;
+  *) fail "不支持的架构 TARGETARCH=${MACH} TARGETVARIANT=${TARGETVARIANT:-}（发布资产只有 amd64）" ;;
 esac
 note "架构 ${MACH}${TARGETVARIANT:-} -> 资产后缀 ${ARCH}"
 
@@ -244,8 +243,8 @@ COPY config.yml README.md dictionary.txt alias.json ChangeLog.md keystore.p12 /a
 ARG TARGETARCH=amd64
 
 RUN case "${TARGETARCH}" in \
-        amd64|arm64) echo "目标架构: ${TARGETARCH}" ;; \
-        *) echo "FATAL: 不支持的架构 ${TARGETARCH}（仅 amd64 / arm64 有产物）" >&2; exit 1 ;; \
+        amd64) echo "目标架构: ${TARGETARCH}" ;; \
+        *) echo "FATAL: 不支持的架构 ${TARGETARCH}（发布资产只有 amd64）" >&2; exit 1 ;; \
     esac
 
 COPY --from=fetch --chmod=0755 /dl/out/iptv /app/iptv
@@ -255,18 +254,31 @@ COPY --from=fetch --chmod=0755 /dl/out/start /app/start
 ARG APP_VERSION=""
 COPY --from=fetch /dl/out/web /app/web
 
-RUN nginx -t -c /etc/nginx/nginx.conf \
- && apktool --version \
- && test -x "${ANDROID_HOME}/build-tools/aapt2" \
- && "${ANDROID_HOME}/build-tools/aapt2" version \
- && apksigner --version \
- && java -version \
- && { jarsigner -help >/dev/null 2>&1; true; } \
- && { keytool -help >/dev/null 2>&1; true; } \
- && { zipalign >/dev/null 2>&1; true; } \
- && test -f /app/web/index.html \
-        || (echo "FATAL: 前端产物缺少 index.html，请先构建 iptv-web" >&2; exit 1) \
- && if [ -n "${APP_VERSION}" ]; then \
+# 镜像自检。两条硬规矩：
+# ① 结构用 `set -e` + 逐条断言，**不能**写成 `A && B && … || (echo FATAL; exit 1)`：
+#    `&&` 与 `||` 同级左结合，那样写会把前面任何一步的失败都报成最后那句 FATAL
+#    （曾经 aapt2 因架构不符退出，日志里却是"前端产物缺少 index.html"）。
+# ② build-tools 全是 x86_64 原生二进制，所以试跑是**真断言** —— 架构装错在这里就得炸。
+RUN set -e; \
+    echo "==== 镜像自检（TARGETARCH=${TARGETARCH}） ===="; \
+    nginx -t -c /etc/nginx/nginx.conf; \
+    apktool --version; \
+    apksigner --version; \
+    java -version; \
+    jarsigner -help >/dev/null 2>&1 \
+      || { echo "FATAL: jarsigner 跑不起来（openjdk 不完整？）" >&2; exit 1; }; \
+    keytool -help >/dev/null 2>&1 \
+      || { echo "FATAL: keytool 跑不起来（openjdk 不完整？）" >&2; exit 1; }; \
+    for t in aapt aapt2 zipalign; do \
+      test -x "${ANDROID_HOME}/build-tools/$t" \
+        || { echo "FATAL: 缺少 ${ANDROID_HOME}/build-tools/$t" >&2; exit 1; }; \
+    done; \
+    "${ANDROID_HOME}/build-tools/aapt2" version; \
+    zipalign 2>&1 | grep -q zipalign \
+      || { echo "FATAL: zipalign 跑不起来（build-tools 是 x86_64 原生二进制，与镜像架构不符时报 Invalid ELF image）" >&2; exit 1; }; \
+    test -f /app/web/index.html \
+      || { echo "FATAL: 前端产物缺少 index.html，请先构建 iptv-web" >&2; exit 1; }; \
+    if [ -n "${APP_VERSION}" ]; then \
       grep -q "name=\"app-version\" content=\"${APP_VERSION}\"" /app/web/index.html \
         || { echo "FATAL: 前端产物内的版本标记与 APP_VERSION=${APP_VERSION} 不一致" >&2; \
              echo "       产物里实际是：$(grep -o 'name="app-version"[^>]*' /app/web/index.html)" >&2; \
@@ -274,10 +286,13 @@ RUN nginx -t -c /etc/nginx/nginx.conf \
       echo "==== 前端版本标记校验通过: ${APP_VERSION} ===="; \
     else \
       echo "==== 未传 APP_VERSION，跳过前端版本标记校验 ===="; \
-    fi \
- && test -f /app/mytv/MyTV.apk \
- && ls -l /app/iptv /app/engine /app/start \
- && for f in /app/iptv /app/engine /app/start; do test -x "$f" || { echo "FATAL: $f 不可执行" >&2; exit 1; }; done
+    fi; \
+    test -f /app/mytv/MyTV.apk \
+      || { echo "FATAL: 缺少 /app/mytv/MyTV.apk（出厂底包）" >&2; exit 1; }; \
+    ls -l /app/iptv /app/engine /app/start; \
+    for f in /app/iptv /app/engine /app/start; do \
+      test -x "$f" || { echo "FATAL: $f 不可执行" >&2; exit 1; }; \
+    done
 
 ENV GOMEMLIMIT=1GiB
 

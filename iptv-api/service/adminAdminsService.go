@@ -51,6 +51,11 @@ func Admins(req dto.AdminProfileReq) dto.ReturnJsonDto {
 }
 
 func UpdataCheckWeb() dto.ReturnJsonDto {
+	// 非 amd64 机器上没有可下载的产物，先说清"请更新镜像"，别走到下载才报缺资产。
+	if err := until.CheckUpdateArch(runtime.GOARCH); err != nil {
+		return dto.ReturnJsonDto{Code: 0, Msg: err.Error(), Type: "warning"}
+	}
+
 	oldWeb := until.GetVersion()
 
 	up, newWeb, err := until.CheckNewVerWeb(oldWeb)
@@ -93,6 +98,11 @@ func UpdataCheckFront(req dto.UpdataCheckFrontReq) dto.ReturnJsonDto {
 }
 
 func UpdataCheckEngine() dto.ReturnJsonDto {
+	// 同上：先判架构，非 amd64 直接提示换镜像。
+	if err := until.CheckUpdateArch(runtime.GOARCH); err != nil {
+		return dto.ReturnJsonDto{Code: 0, Msg: err.Error(), Type: "warning"}
+	}
+
 	// 变量名原先是 oldLic / newLic，但里面装的自始至终是**引擎的版本号字符串
 	var oldVer string
 	verJson, err := dao.WS.SendWS(dao.Request{Action: "getVersion"})
@@ -135,6 +145,9 @@ func downErrDto(err error) dto.ReturnJsonDto {
 }
 
 func UpdataDownWeb() dto.ReturnJsonDto {
+	if err := until.CheckUpdateArch(runtime.GOARCH); err != nil {
+		return dto.ReturnJsonDto{Code: 0, Msg: err.Error(), Type: "warning"}
+	}
 	up, newWeb, err := until.DownloadAndVerifyWeb(runtime.GOARCH)
 	if err != nil {
 		return downErrDto(err)
@@ -146,6 +159,9 @@ func UpdataDownWeb() dto.ReturnJsonDto {
 }
 
 func UpdataDownEngine() dto.ReturnJsonDto {
+	if err := until.CheckUpdateArch(runtime.GOARCH); err != nil {
+		return dto.ReturnJsonDto{Code: 0, Msg: err.Error(), Type: "warning"}
+	}
 	// 同上：这里是引擎版本号，不是授权信息。
 	up, newVer, err := until.DownloadAndVerifyEngine(runtime.GOARCH)
 	if err != nil {

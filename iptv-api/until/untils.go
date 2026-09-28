@@ -696,11 +696,6 @@ func CheckRam() bool {
 }
 
 func IsLowResource() bool {
-	// 判断 ARM 架构
-	if runtime.GOARCH == "arm" {
-		return true
-	}
-
 	// 判断 CPU 核心数
 	if runtime.NumCPU() < 2 {
 		return true

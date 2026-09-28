@@ -53,6 +53,16 @@ var errNoMatchingRelease = errors.New("发布仓库里没有符合条件的新�
 // 调用方要把它与"连不上"分开处理：前者是"已是最新"，后者才是故障。
 func IsNoMatchingRelease(err error) bool { return errors.Is(err, errNoMatchingRelease) }
 
+// CheckUpdateArch 确认本机架构在发布产物里。发布只出 amd64：
+// 非 amd64 机器上继续拼 iptv_arm64 / engine_arm64 只会得到
+// "发布 vX.Y.Z 里没有资产 iptv_arm64" 这种看不懂的报错，这里直接说清。
+func CheckUpdateArch(arch string) error {
+	if arch != "amd64" {
+		return fmt.Errorf("本机架构 %s 不在发布产物里（只发 amd64），不支持在线升级，请更新镜像", arch)
+	}
+	return nil
+}
+
 // releasePerPage / releaseMaxPages：发布位保留历史（api、引擎、mytv 三个序列
 // 都发在同一仓），列表会一直增长。GitHub 的 releases 接口默认只回 30 条，
 // 不显式取满一页，新引擎迟早被挤出首页 —— 症状就是"明明发新版了却检查不到更新"。
