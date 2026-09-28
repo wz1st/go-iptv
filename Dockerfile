@@ -21,7 +21,8 @@ WORKDIR /dl
 RUN --mount=type=secret,id=gh_token <<'SH'
 set -eu
 
-sed -i "sapk add --no-cache curl tar coreutils jq >/dev/null
+sed -i "s|https\?://dl-cdn.alpinelinux.org/alpine|${APK_MIRROR}|g" /etc/apk/repositories
+apk add --no-cache curl tar coreutils jq >/dev/null
 
 fail() { echo "FATAL: $*" >&2; exit 1; }
 note() { echo "==== $* ===="; }
