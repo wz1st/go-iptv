@@ -186,12 +186,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          set -e
-          # 末尾 tr 不能省：gh 的 --jq 按 JSON 输出字符串（带双引号），
-          # 带着引号去 gh release download 会直接失败（找不到资产）。
-          # \r 一并删：CR 混进 tag 会让 download 拼出一个不存在的标签。
-          TAG=$(gh api --paginate --slurp "repos/$REPO/releases?per_page=100" \
-            --jq 'add
+          set -euo pipefail
+          # ⚠️ gh 的 --slurp 与 --jq 互斥（"the --slurp option is not supported with
+          # --jq or --template"）：同时给出时 gh 直接报错退出、标签取空，后面的三架构
+          # 校验全部落空。所以这里**不用 gh 自带的 --jq**：gh 只负责翻页吐原文，
+          # 展平交给外部 jq（--paginate 的输出是「每页一个数组」拼在一起，必须先 add）。
+          # `add // []` 的空守卫不能去掉：jq 对 null 做 `.[]` 会直接报
+          # "Cannot iterate over null" 并以 rc=5 退出，那样报出来的是 jq 的错，
+          # 而不是下面那句"本仓还没有稳定引擎 release"。
+          # 末尾 tr 保留：`\r` 一并删 —— CR 混进 tag 会让 gh release download 拼
+          # 出一个不存在的标签；`"` 是一层防御（`jq -r` 本就不加引号，但 Windows
+          # 侧 jq 会带 CRLF，而这两样症状在 CI 里长得一模一样：找不到资产）。
+          TAG=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+            | jq -rs 'add // []
                   | [.[] | select((.prerelease|not) and (.tag_name|test("^engine-v[0-9]+\\.[0-9]+\\.[0-9]+$")))]
                   | sort_by(.tag_name | ltrimstr("engine-v") | split(".") | map(tonumber))
                   | last | .tag_name // ""' \
