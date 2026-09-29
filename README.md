@@ -54,7 +54,7 @@ docker compose up -d
 ```
 docker volume create iptv
 docker pull v1st233/iptv:latest
-docker run -d --name iptv_server -p <port>:80 -v iptv:/config v1st233/iptv:latest
+docker run -d --privileged --name iptv_server -p <port>:80 -v iptv:/config v1st233/iptv:latest
 ```
 
 ### 方式三：自己构建镜像

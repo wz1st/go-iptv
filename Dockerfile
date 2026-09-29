@@ -240,18 +240,10 @@ COPY nginx/proxy_params.inc /etc/nginx/conf.d/proxy_params.inc
 
 COPY config.yml README.md dictionary.txt alias.json ChangeLog.md keystore.p12 /app/
 
-ARG TARGETARCH=amd64
-
-RUN case "${TARGETARCH}" in \
-        amd64) echo "目标架构: ${TARGETARCH}" ;; \
-        *) echo "FATAL: 不支持的架构 ${TARGETARCH}（发布资产只有 amd64）" >&2; exit 1 ;; \
-    esac
-
 COPY --from=fetch --chmod=0755 /dl/out/iptv /app/iptv
 COPY --from=fetch --chmod=0755 /dl/out/engine /app/engine
 COPY --from=fetch --chmod=0755 /dl/out/start /app/start
 
-ARG APP_VERSION=""
 COPY --from=fetch /dl/out/web /app/web
 
 ENV GOMEMLIMIT=1GiB
