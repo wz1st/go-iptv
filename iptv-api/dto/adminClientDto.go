@@ -9,6 +9,7 @@ type AdminClientDto struct {
 	Tips        Tips     `json:"tips"`
 	IconUrl     string   `json:"iconUrl"`
 	BjUrl       []string `json:"bjUrl"`
+	AdInfo      string   `json:"adInfo"` // 客户端退出弹窗的「广告内容」（config.yml 的 site.ad，仅定制授权可改）
 	UpSize      string   `json:"upSize"` // 当前（线上）apk 大小
 	ApkMd5      string   `json:"apkMd5"` // 当前（线上）apk 的 MD5
 	ApkUrl      string   `json:"apkUrl"`

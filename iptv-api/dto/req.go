@@ -106,6 +106,11 @@ type ClientTipSetReq struct {
 	UserNoReg     string `json:"userNoReg"`
 }
 
+// ClientAdInfoReq 是客户端退出弹窗里的「广告内容」—— 仅定制授权可写。
+type ClientAdInfoReq struct {
+	AdInfo string `json:"adInfo"`
+}
+
 // EPG 列表  /api/epgs
 
 type EpgSaveReq struct {

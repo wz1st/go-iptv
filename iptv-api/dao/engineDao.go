@@ -133,6 +133,20 @@ func LicStillValid() bool {
 	return Lic.Type >= 2 || (Lic.Type == 1 && Lic.Exp > time.Now().Unix())
 }
 
+// LicTypeCustom 是「定制授权」的 License.Type 取值 —— 与前端 utils/site.js 的
+// isCustom（=== 4）同一口径。定制授权专属功能（自定义下载页、定制 APK、
+// 客户端广告内容）一律用它判，别在各处写裸 4。
+const LicTypeCustom int64 = 4
+
+// IsCustomLic 报告当前是否为**有效**的定制授权。
+// 引擎在授权失效时会把 License.Type 清成 0（见 until/license.go 的 clearLicense），
+// 所以 Type != 4 就等于"定制授权已终止" —— 定制专属的配置要立刻停止生效。
+func IsCustomLic() bool {
+	licMu.RLock()
+	defer licMu.RUnlock()
+	return Lic.Type == LicTypeCustom
+}
+
 // reloadLicGap 是两次**远端**授权校验之间的最小间隔。
 const reloadLicGap = 60 * time.Second
 

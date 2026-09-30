@@ -117,6 +117,28 @@ var adminRoutes = []apiRoute{
 	{"clientMyTV/checkBase", api.MytvCheckBase},
 	{"clientMyTV/upgradeBase", api.MytvUpgradeBase},
 
+	// 定制客户端 APK（**定制授权专属**，只发 amd64 的定制分支）。
+	// 与 mytv 的差别：没有 checkBase/upgradeBase（取消基底在线升级），
+	// 上传基底不做包名检查。后端全在引擎里，api 只转发。
+	{"clientCustom/data", api.ClientCustomData},
+	{"clientCustom/save", api.ClientCustomSave},
+	{"clientCustom/buildStatus", api.BuildCustomStatus},
+	{"clientCustom/publish", api.CustomPublishApk},
+	{"clientCustom/uploadBaseApk", api.CustomUploadBaseApk},
+
+	// 「下载页编辑」（**定制授权专属**）：用户自己上传的下载页源码、
+	// 六个占位符的替换与渲染都在引擎里，api 只转发。
+	{"dl/status", api.DlStatusData},
+	{"dl/list", api.DlListData},
+	{"dl/read", api.DlReadData},
+	{"dl/write", api.DlWriteData},
+	{"dl/rename", api.DlRenameData},
+	{"dl/delete", api.DlDeleteData},
+	{"dl/mkdir", api.DlMkdirData},
+	{"dl/upload", api.DlUploadData},
+	{"dl/toggle", api.DlToggleData},
+	{"dl/buttons", api.DlSetButtonsData},
+
 	// --- APK 客户端（编译 + 开机公告）---
 	{"client/data", api.ClientData},
 	{"client/deleteIcon", api.ClientDeleteIcon},
@@ -126,6 +148,8 @@ var adminRoutes = []apiRoute{
 	{"client/needAuthor", api.ClientNeedAuthor},
 	{"client/appInfo", api.ClientAppInfo},
 	{"client/tipSet", api.ClientTipSet},
+	// 广告内容（客户端退出弹窗那行，仅定制授权可改）
+	{"client/adInfo", api.ClientAdInfo},
 	{"client/buildStatus", api.BuildStatus},
 	{"client/publish", api.ClientPublish},
 	{"client/uploadIcon", api.ClientUploadIcon},

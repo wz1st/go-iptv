@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -176,6 +177,44 @@ func SetTipSet(req dto.ClientTipSetReq) dto.ReturnJsonDto {
 
 	dao.SetConfig(cfg)
 	return dto.ReturnJsonDto{Code: 1, Msg: "设置成功", Type: "success"}
+}
+
+// AdInfo 是后台配置的「广告内容」（config.yml 的 site.ad），没配过时给固定默认文案。
+// 这个值存在引擎侧的 Site.Ad 里 —— 引擎对非定制授权会在配置装载时把它重置回默认，
+// 所以那份配置天然只在定制授权下有"自定义"的含义。
+func AdInfo() string {
+	if cfg := dao.GetConfig(); cfg != nil {
+		if ad := strings.TrimSpace(cfg.Site.Ad); ad != "" {
+			return ad
+		}
+	}
+	return until.FixedAdInfo
+}
+
+// ApkAdInfo 是**下发给客户端**的广告内容（登录响应里的 qqinfo）。
+// 只有（仍然有效的）定制授权才用后台配置的自定义值：授权失效时引擎会把
+// License.Type 清成 0，这里随即回落到固定默认文案 —— 即"授权到期立即取消"。
+func ApkAdInfo() string {
+	if !dao.IsCustomLic() {
+		return until.FixedAdInfo
+	}
+	return AdInfo()
+}
+
+// SetAdInfo 保存客户端退出弹窗里的「广告内容」。
+// 仅定制授权可改：非定制授权下这段文案本就该是作者博客，
+// 而且授权一旦失效（Type 清成 0）后台也就改不动了。
+func SetAdInfo(req dto.ClientAdInfoReq) dto.ReturnJsonDto {
+	if !dao.IsCustomLic() {
+		return dto.ReturnJsonDto{Code: 0, Msg: "该功能仅在定制授权下可用", Type: "danger"}
+	}
+
+	cfg := dao.GetConfig()
+	// 留空 = 不清空配置，而是让两端都回落到默认文案（AdInfo 的兜底）。
+	cfg.Site.Ad = strings.TrimSpace(req.AdInfo)
+	dao.SetConfig(cfg)
+
+	return dto.ReturnJsonDto{Code: 1, Msg: "保存成功", Type: "success"}
 }
 
 // GetBuildStatus 返回编译进度，并把两张卡片要的数据一次给全。

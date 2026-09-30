@@ -24,6 +24,13 @@ const FixedAppSign int64 = 12315
 // FixedUpdateText 是客户端升级弹窗的固定文案，原为 config.yml 的 app.update.text。
 const FixedUpdateText = "update"
 
+// FixedAdInfo 是客户端退出弹窗里那行「广告内容」（下发字段 qqinfo）的默认文案，
+// 原先是写死在 service.ApkLogin 里的一串字面量。
+// **必须与引擎侧 iptv-engine/dao/configDao.go 里 cfg.Site.Ad 的默认值逐字一致**：
+// 定制授权下这份内容可以在后台改（配置落在 config.yml 的 site.ad），
+// 其余情况（非定制授权、授权失效后被清成 Type 0）一律回落到这个值。
+const FixedAdInfo = "作者博客: www.qingh.xyz"
+
 type Aes struct {
 	Method    string
 	SecretKey []byte

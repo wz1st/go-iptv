@@ -73,6 +73,16 @@ func ClientTipSet(c *gin.Context) {
 	reply(c, service.SetTipSet(req))
 }
 
+// ClientAdInfo 保存客户端退出弹窗里的「广告内容」（仅定制授权可写）。
+// POST /api/client/adInfo  {"adInfo":"作者博客: www.qingh.xyz"}
+func ClientAdInfo(c *gin.Context) {
+	var req dto.ClientAdInfoReq
+	if !bindJSON(c, &req) {
+		return
+	}
+	reply(c, service.SetAdInfo(req))
+}
+
 // ---- 以下三个端点保持原样（上传是 multipart，构建状态是只读查询）----
 
 // ClientUploadIcon 上传启动图标（multipart/form-data，字段名 iconfile）。

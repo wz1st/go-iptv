@@ -173,16 +173,16 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # 定制分支只认 engine-vX.Y.Z-custom.N 族（主线引擎不看）；不筛 prerelease —— 带 -custom.N 的标签本身即预发布，排序键把 "-custom." 折成一个点才能纯数字比。
           TAG=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
             | jq -rs 'add // []
-                  | [.[] | select((.prerelease|not)
-                                  and (.tag_name|test("^engine-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+                  | [.[] | select((.tag_name|test("^engine-v[0-9]+\\.[0-9]+\\.[0-9]+-custom\\.[0-9]+$"))
                                   and ([.assets[]?.name]|index("SHA256SUMSEngine.txt") != null)
                                   and ([.assets[]?.name]|index("SHA256SUMS.txt") == null))]
-                  | sort_by(.tag_name | ltrimstr("engine-v") | split(".") | map(tonumber))
+                  | sort_by(.tag_name | ltrimstr("engine-v") | gsub("-custom\\."; ".") | split(".") | map(tonumber))
                   | (last // {}) | .tag_name // ""' \
             | tr -d '"\r')
-          [ -n "$TAG" ] || { echo "::error::本仓还没有合格的稳定引擎 release（engine-vX.Y.Z，且带 SHA256SUMSEngine.txt、不含 api 产物）。请先在 iptv-engine 推一个 vX.Y.Z 标签，让引擎仓的 CI 发布"; exit 1; }
+          [ -n "$TAG" ] || { echo "::error::本仓还没有合格的定制引擎 release（engine-vX.Y.Z-custom.N，且带 SHA256SUMSEngine.txt、不含 api 产物）。请先在 iptv-engine 的 custom 分支推一个 vX.Y.Z-custom.N 标签"; exit 1; }
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "使用引擎 release：$TAG"
 
@@ -319,19 +319,74 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       
-      - name: 构建并推送镜像
+
+      # 先只 load 到本地：自检不过就不该推到仓库
+      - name: 构建镜像（本地加载，暂不推）
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile.web
-          push: true
+          push: false
+          load: true
           platforms: ${{ env.TARGET_PLATFORMS }}
           provenance: false
           sbom: false
           build-args: |
             APP_VERSION=${{ needs.prepare.outputs.version }}
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/iptv:${{ needs.prepare.outputs.version }}
-            ${{ secrets.DOCKER_USERNAME }}/iptv:latest
+            ${{ secrets.DOCKER_USERNAME }}/iptv-pro:${{ needs.prepare.outputs.version }}
           cache-from: type=gha,scope=iptv-image
           cache-to: type=gha,scope=iptv-image,mode=max
+
+      # 自检块原本写在 Dockerfile.web 里，现搬到 CI（Dockerfile 保持瘦身）
+      - name: 镜像自检
+        env:
+          IMG: ${{ secrets.DOCKER_USERNAME }}/iptv-pro:${{ needs.prepare.outputs.version }}
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -e
+          docker run --rm -i -e APP_VERSION="$APP_VERSION" "$IMG" sh -s <<'SELFCHECK'
+          set -e
+          echo "==== 镜像自检：APP_VERSION=$APP_VERSION ===="
+          nginx -t -c /etc/nginx/nginx.conf
+          apktool --version
+          apksigner --version
+          java -version
+          jarsigner -help >/dev/null 2>&1 || { echo "FATAL: jarsigner 跑不起来（openjdk 不完整？）" >&2; exit 1; }
+          keytool -help >/dev/null 2>&1 || { echo "FATAL: keytool 跑不起来（openjdk 不完整？）" >&2; exit 1; }
+          for t in aapt aapt2 zipalign; do
+            test -x "$ANDROID_HOME/build-tools/$t" || { echo "FATAL: 缺少 $ANDROID_HOME/build-tools/$t" >&2; exit 1; }
+          done
+          "$ANDROID_HOME/build-tools/aapt2" version
+          zipalign 2>&1 | grep -q zipalign || { echo "FATAL: zipalign 跑不起来（build-tools 是 x86_64 原生二进制，与镜像架构不符时报 Invalid ELF image）" >&2; exit 1; }
+          test -f /app/web/index.html || { echo "FATAL: 前端产物缺少 index.html，请先构建 iptv-web" >&2; exit 1; }
+          if [ -n "$APP_VERSION" ]; then
+            grep -q "name=\"app-version\" content=\"$APP_VERSION\"" /app/web/index.html || { echo "FATAL: 前端产物里的版本标记与 APP_VERSION=$APP_VERSION 不一致" >&2; exit 1; }
+            echo "==== 前端版本标记校验通过: $APP_VERSION ===="
+          fi
+          test -f /app/mytv/MyTV.apk || { echo "FATAL: 缺少 /app/mytv/MyTV.apk（出厂底包）" >&2; exit 1; }
+          ls -l /app/iptv /app/engine /app/start
+          for f in /app/iptv /app/engine /app/start; do
+            test -x "$f" || { echo "FATAL: $f 不可执行" >&2; exit 1; }
+          done
+          echo "==== 镜像自检通过 ===="
+          SELFCHECK
+
+      - name: 推送镜像
+        run: |
+          set -e
+          BASE="${{ secrets.DOCKER_USERNAME }}/iptv-pro"
+          V="${{ needs.prepare.outputs.version }}"
+          docker push "$BASE:$V"
+          docker tag "$BASE:$V" "$BASE:latest"
+          docker push "$BASE:latest"
+
+      - name: 校验镜像清单
+        env:
+          IMG: ${{ secrets.DOCKER_USERNAME }}/iptv-pro:${{ needs.prepare.outputs.version }}
+        run: |
+          set -e
+          docker buildx imagetools inspect --raw "$IMG" | tee /tmp/mi.json
+          PLAT=$(jq -r '[ (.manifests[]? | .platform | "\(.os)/\(.architecture)"), (if has("architecture") then "\(.os)/\(.architecture)" else empty end) ] | unique | join(" ")' /tmp/mi.json)
+          [ "$PLAT" = "${{ env.TARGET_PLATFORMS }}" ] || { echo "::error::镜像清单的平台是 $PLAT，期望 ${{ env.TARGET_PLATFORMS }}"; exit 1; }
+          echo "OK 镜像清单平台：$PLAT"

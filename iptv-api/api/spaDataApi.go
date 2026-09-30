@@ -126,6 +126,10 @@ func ClientData(c *gin.Context) {
 		pageData.IconUrl = "/icon/icon.png"
 	}
 	pageData.BjUrl, _ = until.GetPngFileNames("/config/images/bj")
+	// 广告内容：回后台配置过的值（没配过则是固定默认文案）。
+	// 输入框本身只对定制授权显示，这里不做授权判断 —— 非定制授权下读到的
+	// 也只会是引擎重置过的默认文案。
+	pageData.AdInfo = service.AdInfo()
 
 	c.JSON(200, pageData)
 }

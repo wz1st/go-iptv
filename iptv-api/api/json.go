@@ -25,6 +25,18 @@ func fail(c *gin.Context, msg string) {
 	c.JSON(http.StatusOK, dto.ReturnJsonDto{Code: 0, Msg: msg, Type: "danger"})
 }
 
+// replyData 专给「取数」类端点：成功时把 Data 摊平直接回 —— 与 clientMyTV/data
+// 那条的扁平对象约定一致（前端 `await post(...)` 后直接读字段，不套 .data）。
+// 失败时回 {code,msg,type} 信封：前端靠它弹提示或走授权引导，
+// 而扁平的成功体里没有 code 字段，两者不会混。
+func replyData(c *gin.Context, res dto.ReturnJsonDto) {
+	if res.Code == 1 && res.Data != nil {
+		c.JSON(http.StatusOK, res.Data)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
 // bindJSON 把 JSON 请求体解析到 dst，失败时自行写出错误响应并返回 false，
 func bindJSON(c *gin.Context, dst any) bool {
 	if err := c.ShouldBindJSON(dst); err != nil {

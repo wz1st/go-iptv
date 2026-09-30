@@ -30,6 +30,9 @@ func SiteBootData(c *gin.Context) {
 		"lic_logged": licLogged(),
 		"author":     cfgAuthor(),
 		"installed":  bootstrap.IsInstalled(),
+		// lic_type：授权等级。4 = 定制授权 —— 前端据此决定是否显示
+		// 「下载页编辑」与「定制APK」这两个入口（见 utils/site.js 的 isCustom）。
+		"lic_type": dao.GetLic().Type,
 	})
 }
 
@@ -66,13 +69,20 @@ func SiteIndexData(c *gin.Context) {
 
 	cfg := dao.GetConfig()
 
-	if until.GetFileSize("/config/app/"+cfg.Build.Name+".apk") != "0 MB" {
+	// 默认下载页四个按钮的开关（配在 /config/custom.yml，定制授权专属）。
+	// 非定制授权读不到那份文件 ⇒ 四个开关都是 true，行为与改造前一致。
+	// 这里的"显示"是**开关 && APK 已编译**：文件不存在时按钮点了也是 404，
+	// 所以开关只负责"关"，不负责"无中生有"。
+	swCamel, swMytv, swCustom, swAdmin, customApkName := dao.CustomDlSwitches()
+	pageData.ShowAdmin = swAdmin
+
+	if swCamel && until.GetFileSize("/config/app/"+cfg.Build.Name+".apk") != "0 MB" {
 		pageData.ShowDown = true
 		pageData.ApkName = cfg.Build.Name + "-" + cfg.Build.Version + ".apk"
 		pageData.ApkUrl = "/app/" + cfg.Build.Name + ".apk"
 	}
 
-	if until.GetFileSize("/config/app/"+cfg.Site.MytvNameOr()+"-mytv.apk") != "0 MB" {
+	if swMytv && until.GetFileSize("/config/app/"+cfg.Site.MytvNameOr()+"-mytv.apk") != "0 MB" {
 		pageData.ShowDownMyTV = true
 		// 文件名带真实版本「底包版本.编译号」—— 改造前硬编码 "1.2.0."，
 		// 底包升到 1.2.2 后下载文件名与包内版本就对不上了。
@@ -81,15 +91,30 @@ func SiteIndexData(c *gin.Context) {
 		pageData.MyTVUrl = "/app/" + cfg.Site.MytvNameOr() + "-mytv.apk"
 	}
 
+	// 定制客户端：只在定制授权（Type == 4）下才可能出现产物。名字与产物的取名规则
+	// 与引擎逐字对齐（见 dao.CustomDlSwitches 的兜底），产物文件名不带版本号
+	// （见引擎 customApkService.go 的 customApkOfficialSuffix）。
+	if dao.IsCustomLic() {
+		if swCustom && until.GetFileSize("/config/app/"+customApkName+"-custom.apk") != "0 MB" {
+			pageData.ShowDownCustom = true
+			pageData.CustomName = customApkName + "-custom.apk"
+			pageData.CustomUrl = "/app/" + customApkName + "-custom.apk"
+		}
+	}
+
 	c.JSON(200, gin.H{
-		"installed":      true,
-		"site_name":      SiteName,
-		"show_down":      pageData.ShowDown,
-		"apk_name":       pageData.ApkName,
-		"apk_url":        pageData.ApkUrl,
-		"show_down_mytv": pageData.ShowDownMyTV,
-		"mytv_name":      pageData.MyTVName,
-		"mytv_url":       pageData.MyTVUrl,
+		"installed":        true,
+		"site_name":        SiteName,
+		"show_down":        pageData.ShowDown,
+		"apk_name":         pageData.ApkName,
+		"apk_url":          pageData.ApkUrl,
+		"show_down_mytv":   pageData.ShowDownMyTV,
+		"mytv_name":        pageData.MyTVName,
+		"mytv_url":         pageData.MyTVUrl,
+		"show_down_custom": pageData.ShowDownCustom,
+		"custom_name":      pageData.CustomName,
+		"custom_url":       pageData.CustomUrl,
+		"show_admin":       pageData.ShowAdmin,
 	})
 }
 

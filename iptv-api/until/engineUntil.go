@@ -88,6 +88,19 @@ func CheckEngineVer(latest string) (bool, error) {
 	vLen := 3
 	latest = strings.TrimPrefix(latest, "v")
 	oldVer = strings.TrimPrefix(oldVer, "v")
+	// "-custom.1" 这类后缀只用来区分分支，比较的是三段主版本号。
+	// 不截掉的话 "0-custom" 会被 Sscanf 读成 0，最后一个分支也不成立，
+	// 于是报出"版本号读取失败"这种指错方向的结论。
+	if i := strings.IndexByte(latest, '-'); i >= 0 {
+		latest = latest[:i]
+	}
+	if i := strings.IndexByte(oldVer, '-'); i >= 0 {
+		oldVer = oldVer[:i]
+	}
+	// 截掉后缀后可能就相等了，这里要再判一次，否则会落到函数末尾的兜底 error。
+	if latest == oldVer {
+		return true, nil
+	}
 
 	np := strings.Split(latest, ".")
 	op := strings.Split(oldVer, ".")

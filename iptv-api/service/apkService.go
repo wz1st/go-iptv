@@ -74,7 +74,9 @@ func ApkLogin(user models.IptvUser) dto.LoginRes {
 	result.TipUserNoReg = "当前账号 " + strconv.FormatInt(user.Name, 10) + " " + cfg.Tips.UserNoReg
 	result.TipUserExpired = "当前账号 " + strconv.FormatInt(user.Name, 10) + " " + cfg.Tips.UserExpired
 	result.TipUserForbidden = "当前账号 " + strconv.FormatInt(user.Name, 10) + " " + cfg.Tips.UserForbidden
-	result.AdInfo = "作者博客: www.qingh.xyz"
+	// 广告内容（客户端退出弹窗那行）：默认固定文案，只有定制授权才下发
+	// 后台配置的自定义值；授权失效会立刻回落默认（见 ApkAdInfo）。
+	result.AdInfo = ApkAdInfo()
 	result.RandKey = until.Md5(time.Now().Format("20060102150405") + strconv.FormatInt(user.Name, 10))
 
 	return getUserInfo(user, result)
