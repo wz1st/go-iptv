@@ -1,30 +1,55 @@
-name: 构建镜像并发布
+name: 构建定制镜像（产物全即时编译，不发任何 release）
+
+# 定制版（custom 分支）的交付方式只有一条：**Docker 镜像**。
+# 与主线那份 docker-image.yml 的三点根本差别：
+#   1) 引擎不再"下载上游 release 产物"，改为在本工作流里拉私有仓 iptv-engine 即时
+#      garble 编译 —— 定制版永远不发引擎 release，等下游等于卡死；
+#   2) api / 前端 / 启动器 / 引擎四个产物只在 job 之间用 workflow artifact 传递，
+#      一个都不上传到任何仓库的 releases；
+#   3) 因此本工作流只需要 `contents: read`，而主线那份要 `contents: write`
+#      （它负责往三个仓的 releases 发资产）。权限收窄不是形式：少一个写权限，
+#      就少一条"误把定制产物泄到公共发布位"的通路。
+#
+# 配套：custom 分支上已删除 .github/workflows/mytv-release.yml。mytv 编译基底
+# 是**换基底**用的独立序列，由主线分支发布、定制版只消费（api 侧 until/mytvOnline.go）。
+
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
+      # 定制版标签：vX.Y.Z-custom.N。
+      # 写成 `[0-9]*` 而不是 `[0-9]+` —— GitHub 的标签过滤走 minimatch，`+` 是字面量，
+      # `v[0-9]+.[0-9]+.[0-9]+*` 根本匹配不上 v4.0.0（主线那份文件正踩这个坑，
+      # 所以它实际只能靠 workflow_dispatch 手动触发）。
+      - 'v[0-9]*.[0-9]*.[0-9]*-custom.*'
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（vX.Y.Z）'
+        description: '定制版本号（vX.Y.Z-custom.N）'
         required: true
 
 permissions:
-  contents: write
+  contents: read
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: custom-image-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   GO_VERSION: '1.25'
   NODE_VERSION: '22'
+  GARBLE_VERSION: v0.15.0
   GOPROXY: https://goproxy.cn,direct
   GOSUMDB: sum.golang.google.cn
   # 只发 amd64：Google 的 Linux build-tools 只有 x86_64，arm64 镜像里的 aapt2/zipalign
-  # 根本跑不起来（QEMU 下报 Invalid ELF image）；而且发布资产也只有 amd64 一套。
+  # 根本跑不起来（QEMU 下报 Invalid ELF image）；发布资产也只有 amd64 一套。
   TARGET_PLATFORMS: linux/amd64
+  # 三个源码仓的**定制分支**。定制版绝不接受 main 上的产物 —— 版本号格式、镜像名、
+  # 授权态、功能开关都不同，混用会做出一个"看着是定制版、实际跑主线逻辑"的镜像。
+  SRC_BRANCH: custom
   WEB_REPO: wz1st/iptv-web
   START_REPO: wz1st/iptv-start
+  # 私有仓：需要 OTHER_REPO_TOKEN 具备该仓的 contents: read。
+  ENGINE_REPO: wz1st/iptv-engine
 
 jobs:
   prepare:
@@ -32,26 +57,20 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.parse.outputs.version }}
-      prerelease: ${{ steps.parse.outputs.prerelease }}
     steps:
-      
-      - name: 解析版本号
+      - name: 解析并校验定制版本号
         id: parse
         run: |
           set -e
           V="${{ github.event.inputs.version || github.ref_name }}"
-          case "$V" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::版本号必须是三段式 vX.Y.Z（收到 $V）"; exit 1 ;;
-          esac
+          # 必须带 -custom.N：主线 vX.Y.Z 与定制 vX.Y.Z-custom.N 共用三段号命名空间，
+          # 混进来会让镜像 tag 和前端 app-version 分不清谁是谁，而镜像名又不同
+          # （iptv-pro vs iptv），到最后只能靠人肉对账。
+          printf '%s' "$V" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-custom\.[0-9]+$' \
+            || { echo "::error::定制版版本号必须形如 vX.Y.Z-custom.N（收到 $V）"; exit 1; }
           echo "version=$V" >> $GITHUB_OUTPUT
-          if [ "$V" != "${V%-*}" ]; then
-            echo "prerelease=true" >> $GITHUB_OUTPUT
-          else
-            echo "prerelease=false" >> $GITHUB_OUTPUT
-          fi
+          echo "定制版本号：$V"
 
-  
   web:
     needs: prepare
     runs-on: ubuntu-latest
@@ -60,13 +79,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.WEB_REPO }}
+          ref: ${{ env.SRC_BRANCH }}
           path: web-src
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: web-src/package-lock.json
-      
       - name: 构建前端
         env:
           APP_VERSION: ${{ needs.prepare.outputs.version }}
@@ -76,6 +95,8 @@ jobs:
           npm ci
           npm run build
           test -f dist/index.html || { echo "::error::前端产物缺少 index.html"; exit 1; }
+          # 版本标记是"前端与 api 同源"的唯一凭据：Dockerfile.web 的 image-versions.txt
+          # 也是从这个 meta 读的，标记写错会让启动器的版本兜底跟着错。
           grep -q "name=\"app-version\" content=\"$APP_VERSION\"" dist/index.html \
             || { echo "::error::前端产物里没有预期的版本标记（APP_VERSION=$APP_VERSION）"; exit 1; }
           rm -rf ../webdist
@@ -88,7 +109,6 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  
   start:
     needs: prepare
     runs-on: ubuntu-latest
@@ -97,6 +117,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.START_REPO }}
+          ref: ${{ env.SRC_BRANCH }}
           path: start-src
       - uses: actions/setup-go@v5
         with:
@@ -121,7 +142,6 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  
   app:
     needs: prepare
     runs-on: ubuntu-latest
@@ -146,7 +166,6 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -ldflags "-s -w -X iptv-api/until.Version=$VERSION" \
             -o ../iptv_all/iptv_amd64 main.go
-          
           ../iptv_all/iptv_amd64 -version | grep -qx "$VERSION" \
             || { echo "::error::iptv 二进制报告的版本不是 $VERSION"; ../iptv_all/iptv_amd64 -version; exit 1; }
           ls -l ../iptv_all
@@ -157,59 +176,73 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  
-  
-  
-  
   engine:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     steps:
-      - name: 找最新稳定引擎 release
-        id: rel
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # 定制分支只认 engine-vX.Y.Z-custom.N 族（主线引擎不看）；不筛 prerelease —— 带 -custom.N 的标签本身即预发布，排序键把 "-custom." 折成一个点才能纯数字比。
-          TAG=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
-            | jq -rs 'add // []
-                  | [.[] | select((.tag_name|test("^engine-v[0-9]+\\.[0-9]+\\.[0-9]+-custom\\.[0-9]+$"))
-                                  and ([.assets[]?.name]|index("SHA256SUMSEngine.txt") != null)
-                                  and ([.assets[]?.name]|index("SHA256SUMS.txt") == null))]
-                  | sort_by(.tag_name | ltrimstr("engine-v") | gsub("-custom\\."; ".") | split(".") | map(tonumber))
-                  | (last // {}) | .tag_name // ""' \
-            | tr -d '"\r')
-          [ -n "$TAG" ] || { echo "::error::本仓还没有合格的定制引擎 release（engine-vX.Y.Z-custom.N，且带 SHA256SUMSEngine.txt、不含 api 产物）。请先在 iptv-engine 的 custom 分支推一个 vX.Y.Z-custom.N 标签"; exit 1; }
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "使用引擎 release：$TAG"
+      # 这一步就是"即时编译"：不再 gh release download，直接拿私有仓源码编。
+      - name: 取出引擎源码（私有仓 · 定制分支）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.SRC_BRANCH }}
+          token: ${{ secrets.OTHER_REPO_TOKEN }}
+          path: engine-src
 
-      
-      
-      - name: 下载并校验引擎产物
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ steps.rel.outputs.tag }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: engine-src/go.sum
+
+      - uses: actions/cache@v4
+        id: garble-bin
+        with:
+          path: ~/go/bin/garble
+          key: garble-${{ env.GARBLE_VERSION }}-${{ env.GO_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: 安装 garble
+        if: steps.garble-bin.outputs.cache-hit != 'true'
+        run: go install mvdan.cc/garble@${{ env.GARBLE_VERSION }}
+
+      - name: 闸门（gofmt / vet / test）
+        working-directory: engine-src
         run: |
           set -e
-          mkdir -p engine_all
-          
-          
-          gh release download "$TAG" --repo "$REPO" --dir engine_all --clobber \
-            --pattern 'engine_amd64' \
-            --pattern 'SHA256SUMSEngine.txt'
+          gofmt -l . | tee /tmp/fmt-engine
+          [ ! -s /tmp/fmt-engine ] || { echo "::error::引擎 gofmt 未通过"; exit 1; }
+          go vet ./...
+          go test ./... -count=1
 
-          # release 资产是裸 blob、不保存 mode ⇒ 下载回来一律 0644，要执行就得自己 chmod
-          ls -l engine_all
-          # 先断言齐全再 chmod：反过来时缺产物会由 chmod 抢着报 "cannot access"，把问题说成工具报错
-          f="engine_all/engine_amd64"
-          test -f "$f" || { echo "::error::$TAG 里缺少 engine_amd64，镜像需要 amd64 产物"; exit 1; }
-          chmod +x "$f"
-          test -x "$f" || { echo "::error::engine_amd64 没有可执行位（release 资产不带 mode，必须显式 chmod）"; exit 1; }
-          ( cd engine_all && sha256sum -c SHA256SUMSEngine.txt )
+      - name: 即时编译引擎（garble 混淆 · amd64）
+        working-directory: engine-src
+        run: |
+          set -e
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          garble version
+          mkdir -p ../engine_all
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            garble build -a -ldflags '-extldflags "-static" -s -w' \
+            -o ../engine_all/engine_amd64 main.go
+          chmod +x ../engine_all/engine_amd64
+          ls -l ../engine_all
+
+      - name: 校验引擎版本号（独立序列，且不低于定制版下限）
+        run: |
+          set -e
+          V=$(./engine_all/engine_amd64 -version)
+          V=$(printf '%s' "$V" | tr -d '\r')
+          echo "engine -version -> $V"
+          # 引擎有**独立版本序列**（与 api 的 vX.Y.Z 不同源），custom 分支上必须带
+          # -custom.N：不带就说明这个 commit 的 version/version.go 还停在主线编号上。
+          printf '%s' "$V" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-custom\.[0-9]+$' \
+            || { echo "::error::custom 分支的引擎版本必须形如 vX.Y.Z-custom.N（收到 $V）"; exit 1; }
+          # api 侧 service/adminClientMyTVService.go 编译 mytv 前会卡
+          # until.CheckEngineVer("v3.0.0")（三段比、剥 -custom.N），低于它直接拒绝打包。
+          # 下限的次段与末段都是 0 ⇒ 只比主段就等价，这里把同一口径提前钉住，
+          # 免得整个镜像构建通过、装机后才发现"引擎版本门不过"。
+          A=$(printf '%s' "${V%%-custom.*}" | sed 's/^v//' | cut -d. -f1)
+          [ "$A" -ge 3 ] || { echo "::error::引擎版本 $V 低于定制版下限 v3.0.0（mytv 编译会被版本门拒绝）"; exit 1; }
+          ( cd engine_all && sha256sum engine_amd64 > SHA256SUMSEngine.txt && cat SHA256SUMSEngine.txt )
       - uses: actions/upload-artifact@v4
         with:
           name: engine_all
@@ -217,7 +250,6 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  
   image:
     needs: [prepare, web, start, app, engine]
     runs-on: ubuntu-latest
@@ -242,72 +274,35 @@ jobs:
           name: start_all
           path: start_all
 
-      
-      - name: 生成前端整包与校验清单
+      - name: 产物齐备与版本同源自检
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -e
-          # artifact 传递同样丢 mode（app job 里 0755 ⇒ 本 job 下载后 0644），三份产物都要补
+          # artifact 传递丢 mode（job 里 0755 ⇒ 本 job 下载后 0644），三份都要补
           ls -l iptv_all engine_all start_all
           for f in iptv_all/iptv_amd64 start_all/start_amd64 engine_all/engine_amd64; do
             test -f "$f" || { echo "::error::缺少产物 $f（artifact 没传全？）"; exit 1; }
             chmod +x "$f"
           done
-          # 别写成 ENG=$(... -version | tr)：管道退出码取自 tr，前半段失败会被 set -e 漏掉
-          ENG=$(./engine_all/engine_amd64 -version)
-          ENG=$(printf '%s' "$ENG" | tr -d '\r')
-          echo "引擎版本：$ENG"
-          case "$ENG" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::引擎 -version 输出不是三段版本号：$ENG"; exit 1 ;;
-          esac
+          test -s webdist/index.html || { echo "::error::缺少 webdist/index.html"; exit 1; }
 
-          tar -czf iptv_all/webdist.tar.gz webdist
-          tar -tzf iptv_all/webdist.tar.gz | head -5
-
-          ( cd iptv_all && sha256sum iptv_amd64 webdist.tar.gz > SHA256SUMS.txt )
-          cat iptv_all/SHA256SUMS.txt
-
-      - name: 发布 api 到 go-iptv releases
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare.outputs.version }}
-          name: Release ${{ needs.prepare.outputs.version }}
-          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
-          generate_release_notes: true
-          overwrite_files: true
-          files: iptv_all/*
-
-      - name: 探测跨仓发布令牌
-        run: |
-          if [ -n "${{ secrets.OTHER_REPO_TOKEN }}" ]; then
-            echo "OTHER_REPO_TOKEN_PRESENT=true" >> $GITHUB_ENV
-          else
-            echo "未配置 OTHER_REPO_TOKEN，跳过前端/启动器发布"
-          fi
-
-      - name: 发布前端到 iptv-web releases
-        if: ${{ env.OTHER_REPO_TOKEN_PRESENT == 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.OTHER_REPO_TOKEN }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          gh release view "$VERSION" --repo "$WEB_REPO" >/dev/null 2>&1 \
-            || gh release create "$VERSION" --repo "$WEB_REPO" \
-                 --title "$VERSION" --notes "前端产物 $VERSION"
-          gh release upload "$VERSION" iptv_all/webdist.tar.gz --repo "$WEB_REPO" --clobber
-
-      - name: 发布启动器到 iptv-start releases
-        if: ${{ env.OTHER_REPO_TOKEN_PRESENT == 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.OTHER_REPO_TOKEN }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          gh release view "$VERSION" --repo "$START_REPO" >/dev/null 2>&1 \
-            || gh release create "$VERSION" --repo "$START_REPO" \
-                 --title "$VERSION" --notes "启动器产物 $VERSION"
-          gh release upload "$VERSION" \
-            start_all/start_amd64 \
-            --repo "$START_REPO" --clobber
+          # 这里排的是**离线口径**：定制版没有发布位可对账，四个产物必须彼此自洽。
+          # 前端标记与 api 版本同源这条，build_image.sh 与 Dockerfile.web 各有一道，
+          # 但那里报错时已经进构建中途了，日志被 tail 掉只剩一句 FATAL。
+          grep -q "name=\"app-version\" content=\"$APP_VERSION\"" webdist/index.html \
+            || { echo "::error::webdist 的版本标记与 $APP_VERSION 不一致"; exit 1; }
+          # 别写成 V=$(... -version | tr)：管道退出码取自 tr，前半段失败会被 set -e 漏掉
+          APIV=$(./iptv_all/iptv_amd64 -version); APIV=$(printf '%s' "$APIV" | tr -d '\r')
+          STV=$(./start_all/start_amd64 -version); STV=$(printf '%s' "$STV" | tr -d '\r')
+          ENGV=$(./engine_all/engine_amd64 -version); ENGV=$(printf '%s' "$ENGV" | tr -d '\r')
+          echo "api=$APIV  start=$STV  engine=$ENGV  front=$APP_VERSION"
+          [ "$APIV" = "$APP_VERSION" ] \
+            || { echo "::error::api 版本 $APIV 与定制版本号 $APP_VERSION 不一致"; exit 1; }
+          printf '%s' "$STV" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::启动器版本号不是三段式：$STV"; exit 1; }
+          printf '%s' "$ENGV" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-custom\.[0-9]+$' \
+            || { echo "::error::引擎版本号不是定制序列：$ENGV"; exit 1; }
 
       - name: 登录镜像仓库
         uses: docker/login-action@v3
@@ -318,9 +313,10 @@ jobs:
       - name: 准备 Buildx
         uses: docker/setup-buildx-action@v3
 
-      
-
-      # 先只 load 到本地：自检不过就不该推到仓库
+      # 先只 load 到本地：自检不过就不该推到仓库。
+      # cache scope 与主线分开（iptv-pro-image / iptv-image）：两边的 Dockerfile
+      # 虽然同源，但产物来源完全不同（主线是下载 release，这里是即时编译），
+      # 共用一个 scope 会让缓存命中掩盖"产物其实换了"的事实。
       - name: 构建镜像（本地加载，暂不推）
         uses: docker/build-push-action@v6
         with:
@@ -335,10 +331,11 @@ jobs:
             APP_VERSION=${{ needs.prepare.outputs.version }}
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/iptv-pro:${{ needs.prepare.outputs.version }}
-          cache-from: type=gha,scope=iptv-image
-          cache-to: type=gha,scope=iptv-image,mode=max
+          cache-from: type=gha,scope=iptv-pro-image
+          cache-to: type=gha,scope=iptv-pro-image,mode=max
 
-      # 自检块原本写在 Dockerfile.web 里，现搬到 CI（Dockerfile 保持瘦身）
+      # 自检块原本写在 Dockerfile.web 里，现搬到 CI（Dockerfile 保持瘦身）。
+      # 定制版没有发布页可看，这道自检就是唯一的验收点。
       - name: 镜像自检
         env:
           IMG: ${{ secrets.DOCKER_USERNAME }}/iptv-pro:${{ needs.prepare.outputs.version }}
@@ -360,14 +357,24 @@ jobs:
           "$ANDROID_HOME/build-tools/aapt2" version
           zipalign 2>&1 | grep -q zipalign || { echo "FATAL: zipalign 跑不起来（build-tools 是 x86_64 原生二进制，与镜像架构不符时报 Invalid ELF image）" >&2; exit 1; }
           test -f /app/web/index.html || { echo "FATAL: 前端产物缺少 index.html，请先构建 iptv-web" >&2; exit 1; }
-          if [ -n "$APP_VERSION" ]; then
-            grep -q "name=\"app-version\" content=\"$APP_VERSION\"" /app/web/index.html || { echo "FATAL: 前端产物里的版本标记与 APP_VERSION=$APP_VERSION 不一致" >&2; exit 1; }
-            echo "==== 前端版本标记校验通过: $APP_VERSION ===="
-          fi
           test -f /app/mytv/MyTV.apk || { echo "FATAL: 缺少 /app/mytv/MyTV.apk（出厂底包）" >&2; exit 1; }
           ls -l /app/iptv /app/engine /app/start
           for f in /app/iptv /app/engine /app/start; do
             test -x "$f" || { echo "FATAL: $f 不可执行" >&2; exit 1; }
+          done
+          # 三个产物 + 前端标记的版本必须同时出现在 image-versions.txt 里 ——
+          # 这是启动器"产物答不出自身版本"时的兜底来源，少了或对不上就退化成"未知"。
+          cat /app/image-versions.txt
+          grep -qx "api=$APP_VERSION" /app/image-versions.txt \
+            || { echo "FATAL: image-versions.txt 里的 api 版本与 APP_VERSION=$APP_VERSION 不一致" >&2; exit 1; }
+          grep -qx "front=$APP_VERSION" /app/image-versions.txt \
+            || { echo "FATAL: image-versions.txt 里的 front 版本与 APP_VERSION=$APP_VERSION 不一致（前端标记没进产物？）" >&2; exit 1; }
+          grep -qE "^engine=v[0-9]+\.[0-9]+\.[0-9]+-custom\.[0-9]+$" /app/image-versions.txt \
+            || { echo "FATAL: image-versions.txt 里的 engine 版本不是定制序列" >&2; exit 1; }
+          # 自愈副本是"默认使用镜像内置产物"的落点（custom 已取消在线升级），
+          # 缺了它启动器就只能眼看着运行目录里的产物被换坏。
+          for f in /app/.image/iptv /app/.image/engine; do
+            test -x "$f" || { echo "FATAL: 缺少镜像内置产物副本 $f（启动器自愈无从恢复）" >&2; exit 1; }
           done
           echo "==== 镜像自检通过 ===="
           SELFCHECK
@@ -390,3 +397,33 @@ jobs:
           PLAT=$(jq -r '[ (.manifests[]? | .platform | "\(.os)/\(.architecture)"), (if has("architecture") then "\(.os)/\(.architecture)" else empty end) ] | unique | join(" ")' /tmp/mi.json)
           [ "$PLAT" = "${{ env.TARGET_PLATFORMS }}" ] || { echo "::error::镜像清单的平台是 $PLAT，期望 ${{ env.TARGET_PLATFORMS }}"; exit 1; }
           echo "OK 镜像清单平台：$PLAT"
+
+      - name: 产物清单摘要
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -e
+          # 定制版没有任何 release 页面，产物只能在这里留下记录
+          {
+            echo "## 定制镜像 $APP_VERSION"
+            echo
+            echo "| 产物 | 说明 |"
+            echo "|---|---|"
+            echo "| api | 即时编译 self repo（iptv-api） |"
+            echo "| 前端 | 即时编译 ${WEB_REPO}@${SRC_BRANCH} |"
+            echo "| 启动器 | 即时编译 ${START_REPO}@${SRC_BRANCH} |"
+            echo "| 引擎 | **即时编译** ${ENGINE_REPO}@${SRC_BRANCH}（garble 混淆） |"
+            echo
+            echo '```'
+            printf 'api    = %s\n' "$(./iptv_all/iptv_amd64 -version)"
+            printf 'engine = %s\n' "$(./engine_all/engine_amd64 -version)"
+            printf 'start  = %s\n' "$(./start_all/start_amd64 -version)"
+            printf 'front  = %s\n' "$APP_VERSION"
+            echo
+            ls -l iptv_all/iptv_amd64 engine_all/engine_amd64 start_all/start_amd64
+            echo '```'
+            echo
+            echo "镜像：\`${{ secrets.DOCKER_USERNAME }}/iptv-pro:${APP_VERSION}\`（同时更新 \`:latest\`）"
+            echo
+            echo "> 定制版不发布任何 release；交付通道只有该镜像。"
+          } >> $GITHUB_STEP_SUMMARY
