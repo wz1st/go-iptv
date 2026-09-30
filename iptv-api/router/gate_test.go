@@ -542,7 +542,7 @@ func TestBackendServesNoPages(t *testing.T) {
 		"/admin/meals", "/admin/channels", "/admin/channelsSource",
 		"/admin/epgsList", "/admin/epgFrom",
 		"/admin/client", "/admin/clientMyTV", "/admin/admins",
-		"/admin/engine", "/admin/updata", "/admin/about",
+		"/admin/engine", "/admin/about",
 		// /admin/login 是页面；它的接口是 POST /api/login。
 		"/admin/login",
 	}
@@ -601,6 +601,38 @@ func TestAdminRoutesArePOSTOnly(t *testing.T) {
 		sort.Strings(bad)
 		t.Errorf("管理端接口只允许 POST + JSON，实际有 %d 条非 POST：\n  %s",
 			len(bad), joinLines(bad))
+	}
+}
+
+// 在线升级（api / 引擎 / 前端整包）在定制分支整体删除，只留 mytv 编译基底那组。
+// 反向断言：这 8 条必须消失，mytv 那两条必须还在 —— 漏一条就是删得不干净。
+func TestOnlineUpgradeRoutesAreGone(t *testing.T) {
+	r := InitRouter(false)
+	have := map[string]bool{}
+	for _, rt := range r.Routes() {
+		have[rt.Method+" "+rt.Path] = true
+	}
+
+	removed := []string{
+		"updata/data",
+		"updata/checkWeb", "updata/checkFront", "updata/checkEngine",
+		"updata/downWeb", "updata/downFront", "updata/downEngine",
+		"updata/run",
+	}
+	for _, name := range removed {
+		p := apiBase + "/" + name
+		for _, m := range []string{http.MethodGet, http.MethodPost} {
+			if have[m+" "+p] {
+				t.Errorf("%s %s 应随在线升级一起删除", m, p)
+			}
+		}
+	}
+
+	for _, name := range []string{"clientMyTV/checkBase", "clientMyTV/upgradeBase"} {
+		p := apiBase + "/" + name
+		if !have[http.MethodPost+" "+p] {
+			t.Errorf("POST %s 必须保留：mytv 编译基底在线链路不受本次删除影响", p)
+		}
 	}
 }
 

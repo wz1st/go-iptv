@@ -42,10 +42,6 @@ func Install() (bool, string) {
 		log.Println("删除/bin文件夹失败:", err)
 		return false, err.Error()
 	}
-	if err := os.RemoveAll("/config/updata/"); err != nil {
-		log.Println("删除/updata文件夹失败:", err)
-		return false, err.Error()
-	}
 	if err := os.RemoveAll("/config/images/"); err != nil {
 		log.Println("删除/images文件夹失败:", err)
 		return false, err.Error()

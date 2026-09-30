@@ -173,17 +173,4 @@ func AboutData(c *gin.Context) {
 	})
 }
 
-// UpdataData 对应 html.Updata —— 管理系统与引擎各自的当前版本号。
-// 引擎未安装/未就绪时 engine 为空串，前端显示 "-"。
-func UpdataData(c *gin.Context) {
-	_, ok := until.GetAuthName(c)
-	if !ok {
-		c.JSON(200, dto.NewAdminRedirectDto())
-		return
-	}
-	c.JSON(200, gin.H{
-		"title":   "在线升级",
-		"version": until.GetVersion(),
-		"engine":  until.EngineVersion(),
-	})
-}
+// UpdataData（在线升级页的取数口）随在线升级一并删除：定制分支没有这条链路。

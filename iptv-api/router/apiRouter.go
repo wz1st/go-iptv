@@ -182,15 +182,9 @@ var adminRoutes = []apiRoute{
 	{"engine/logout", api.EngineLogout},
 	{"engine/shortURL", api.EngineShortURL},
 
-	// --- 在线升级 ---
-	{"updata/data", api.UpdataData},
-	{"updata/checkWeb", api.UpdataCheckWeb},
-	{"updata/checkFront", api.UpdataCheckFront},
-	{"updata/checkEngine", api.UpdataCheckEngine},
-	{"updata/downWeb", api.UpdataDownWeb},
-	{"updata/downFront", api.UpdataDownFront},
-	{"updata/downEngine", api.UpdataDownEngine},
-	{"updata/run", api.Updata},
+	// 在线升级（含数据 / 检查 / 下载 / 触发）在定制分支整体删除：
+	// 定制包不发公共发布位，版本更新一律换镜像。
+	// mytv 编译基底那条是独立的一组端点（clientMyTV/checkBase、upgradeBase），不受影响。
 
 	// --- 订阅地址 ---
 	{"rss/url", api.GetRssUrl},
