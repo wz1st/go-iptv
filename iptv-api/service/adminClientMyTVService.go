@@ -73,7 +73,9 @@ func SetMyTVAppInfo(req dto.MyTVBuildReq) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "正在打包中，请稍后再试", Type: "danger"}
 	}
 
-	_, err := until.CheckEngineVer("v3.2.15")
+	// 版本门随引擎同步下调：引擎版本回退到 v3.0.0 后，v3.2.15 会把 velvet mytv 编译卡死
+	// （直到 CheckEngineVer 恒定报「该功能需要引擎最低版本为 v3.2.15」）。
+	_, err := until.CheckEngineVer("v3.0.0")
 	if err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: err.Error(), Type: "danger"}
 	}
