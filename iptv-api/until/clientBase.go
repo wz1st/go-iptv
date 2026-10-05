@@ -4,12 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // 客户端编译基底（与 mytv 同一套机制，但**流程全在 api 侧**，不经引擎）。
 //
 // 与 mytv 的差异只有一处，且是刻意的：mytv 的编译由引擎执行（WS `buildMyTV`），
-// 客户端这边直接在本进程里跑 apktool —— 客户端没有"引擎��"这个依赖，
+// 客户端这边直接在本进程里跑 apktool —— 客户端没有"引擎"这个依赖，
 // 少一跳 WS 就少一处可能静默失败的中间环节。
 //
 // 基底构成（两个文件，与 CI 逐字一致）：
@@ -34,6 +35,11 @@ const (
 
 // PubClientBaseFile 记录"线上包编译时所用的基底版本"。
 func PubClientBaseFile() string { return ClientUserDir + "/PubBase" }
+
+var (
+	clientFactoryPkgOnce sync.Once
+	clientFactoryPkg     string
+)
 
 // ClientBaseDir 返回当前生效的基底目录：用户上传的优先，没有才用镜像自带的。
 func ClientBaseDir() string {
@@ -117,6 +123,16 @@ func BaseVersionFromRelease(versionName string) string {
 // ClientFactoryPackage 返回镜像出厂基包（/app/client/Client.apk）的包名。
 // 上传基包时用它做准入校验 —— **只接受指定包名**，否则编译出来的包
 // 与服务端 `until.FixedPackage` 的密钥派生契约对不上，登录会解出乱码。
+//
+// 与 MytvFactoryPackage 同构：探测一次就缓存。出厂基包在镜像里不变，
+// 每次上传都跑一遍 aapt2 纯属浪费（探测本身要起进程）。
 func ClientFactoryPackage() string {
-	return factoryPackage(ClientDir + "/" + clientBaseAsset)
+	clientFactoryPkgOnce.Do(func() {
+		info, err := ProbeApk(ClientDir + "/" + clientBaseAsset)
+		if err != nil {
+			return
+		}
+		clientFactoryPkg = info.Package
+	})
+	return clientFactoryPkg
 }
