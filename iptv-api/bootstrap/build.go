@@ -7,9 +7,8 @@ import (
 	"iptv-api/until"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -49,246 +48,52 @@ func BuildAPK(staged bool) bool {
 	SetBuildStatus(1) // 编译中
 	defer SetBuildStatus(0)
 
-	log.Println("开始编译APK ...")
+	log.Println("开始编译客户端APK ...")
 	cfg := dao.GetConfig()
-	newUrl := cfg.ServerUrl
-	apkName := cfg.Build.Name
-	apkVersion := cfg.Build.Version
-	apkPath := OfficialAPKPath(apkName)
+
+	buildNo := cfg.Build.Version
+	apkPath := OfficialAPKPath(cfg.Build.Name)
 	if staged {
-		apkVersion = cfg.Build.NewVersion
-		apkPath = StagedAPKPath(apkName)
+		buildNo = cfg.Build.NewVersion
+		apkPath = StagedAPKPath(cfg.Build.Name)
 	}
-	if apkVersion == "" {
+	if buildNo == "" {
 		log.Println("版本号为空，跳过编译")
 		return false
 	}
-	iconFile := "/config/images/icon/icon.png"
 
-	clientSource := "/client"
-	outputDir := "/config/app"
-
-	timeStamp := fmt.Sprintf("%d", time.Now().Unix())
-	buildBaseDir := fmt.Sprintf("/tmp/build_%s", timeStamp)
-	defer os.RemoveAll(buildBaseDir)
-	buildSourceDir := buildBaseDir + clientSource
-	os.RemoveAll(apkPath)
-
-	buildKey := buildBaseDir + "/auto_keystore.jks"
-	keyAlias := "iptvkey"
-
-	if err := os.MkdirAll(buildBaseDir, 0755); err != nil {
-		log.Println("编译目录创建失败:", err)
+	baseApk := until.ClientBaseDir() + "/Client.apk"
+	if !until.Exists(baseApk) {
+		log.Println("找不到编译基底:", baseApk, " ，请先上传或在线升级基底")
 		return false
 	}
 
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		log.Println("apk输出目录创建失败:", err)
-		return false
+	// 先把旧产物挪走：apktool 写失败时会留下半截 APK，
+	// 而它会顶替掉线上包的位置 —— 用户下一次点下载拿到的是编坏的包。
+	_ = os.Remove(apkPath)
+
+	base := until.GetClientBaseVersion()
+	workDir := filepath.Join(os.TempDir(), fmt.Sprintf("client_build_%d", time.Now().UnixNano()))
+	values := until.ClientBuildValues{
+		ServerURL:   cfg.ServerUrl,
+		AppName:     cfg.Build.Name,
+		Version:     buildNo,
+		VersionName: until.FormatClientVersion(base, buildNo),
+		// 没上传 logo / 背景时传空串，编译侧就保留包内默认图。
+		IconPath:       clientIconPath(),
+		BackgroundPath: clientBackgroundPath(),
 	}
 
-	cmd := exec.Command("bash", "-c", "cp -rf "+clientSource+" "+buildBaseDir)
-	output, err := cmd.CombinedOutput()
+	err := until.BuildClientApk(baseApk, apkPath, workDir, values)
+	// 工作目录一定要清：apktool 的中间产物能到几百 MB，
+	// 容器磁盘被塞满会让后面所有写盘失败（连日志都写不进去）。
+	defer os.RemoveAll(workDir)
 	if err != nil {
-		log.Printf("编译环境复制失败: %v --- %s\n", err, string(output))
+		log.Println("客户端APK编译失败:", err)
 		return false
 	}
 
-	if until.Exists(iconFile) {
-		log.Println("更换图标")
-		if dao.Lic.Type >= 1 {
-			until.CopyFile(iconFile, buildSourceDir+"/res/drawable-hdpi/ezpay.png")
-		}
-		err1 := until.CopyFile(iconFile, buildSourceDir+"/res/drawable-hdpi/icon.png")
-		// err2 := until.CopyFile(iconFile, buildSourceDir+"/res/drawable-hdpi/logo.png")
-		if err1 != nil {
-			log.Println("复制icon文件失败:", err1)
-			return false
-		}
-	}
-
-	if until.GetBg() != "" {
-		log.Println("更换背景")
-		err := until.CopyFile("/config/images/bj/"+until.GetBg(), buildSourceDir+"/res/drawable-hdpi/ez_bg.png")
-		if err != nil {
-			log.Println("复制背景文件失败:", err)
-			return false
-		}
-	}
-
-	cmd = exec.Command(
-		"keytool", "-genkey", "-v",
-		"-keystore", buildKey,
-		"-alias", keyAlias,
-		"-keyalg", "RSA",
-		"-keysize", "2048",
-		"-validity", "10000",
-		"-storepass", "123456",
-		"-keypass", "123456",
-		"-dname", "CN=Auto, OU=Dev, O=Company, L=City, S=State, C=CN",
-	)
-
-	if err := cmd.Run(); err != nil {
-		log.Println("keytool 生成签名失败:", err)
-		return false
-	}
-
-	if !renameApk(apkName, apkVersion, buildSourceDir) {
-		return false
-	}
-
-	log.Println("更新服务器地址 ...")
-
-	if err := replaceHost(buildSourceDir+"/smali", newUrl); err != nil {
-		log.Println("替换Host失败:", err)
-		return false
-	}
-
-	log.Println("更新Sign ...")
-
-	if err := replaceSign(buildSourceDir, until.FixedAppSign); err != nil {
-		log.Println("替换Sign失败:", err)
-		return false
-	}
-	log.Println("开始编译APK ...")
-
-	if until.IsLowResource() || os.Getenv("LOWOS") == "true" {
-		cmd = exec.Command("apktool",
-			"-JXmx128M",
-			"-JXX:+UseParallelGC",
-			"-JXX:+UseStringDeduplication",
-			"-JXX:ParallelGCThreads=2",
-			"-JDfile.encoding=utf-8",
-			"-JDjdk.util.zip.disableZip64ExtraFieldValidation=true",
-			"-JDjdk.nio.zipfs.allowDotZipEntry=true",
-			"b", buildSourceDir, "-o", apkPath)
-	} else {
-		cmd = exec.Command("apktool", "b", buildSourceDir, "-o", apkPath)
-	}
-
-	if err := cmd.Run(); err != nil {
-		log.Println("编译出错:", err)
-		return false
-	}
-
-	log.Println("开始签名APK ...")
-	cmd = exec.Command(
-		"jarsigner",
-		"-verbose",
-		"-sigalg", "SHA256withRSA",
-		"-digestalg", "SHA-256",
-		"-keystore", buildKey,
-		"-storepass", "123456",
-		"-keypass", "123456",
-		apkPath,
-		keyAlias,
-	)
-	if err := cmd.Run(); err != nil {
-		log.Println("签名出错:", err)
-		return false
-	}
-
-	log.Println("APK编译完成")
-
-	return true
-}
-
-func renameApk(apkName, apkVersion, buildSourceDir string) bool {
-	log.Println("开始重命名APK")
-	log.Println("[*]应用名:", apkName, "版本号:", apkVersion)
-	if !until.Exists(buildSourceDir + "/AndroidManifest.xml") {
-		log.Println("找不到AndroidManifest.xml文件")
-		return false
-	}
-	log.Println("[*]修改 AndroidManifest.xml ...")
-
-	data, err := os.ReadFile(buildSourceDir + "/AndroidManifest.xml")
-	if err != nil {
-		log.Println("[!]读取AndroidManifest.xml文件失败:", err)
-		return false
-	}
-
-	re := regexp.MustCompile(`package="([^"]*)"`)
-	match := re.FindStringSubmatch(string(data))
-	if len(match) < 2 {
-		log.Println("[!]无法解析应用标识")
-		return false
-	}
-	oldPackage := match[1]
-
-	// 应用标识统一改成 until.FixedPackage（不再来自请求/配置）
-	updatedData := re.ReplaceAllString(string(data), `package="`+until.FixedPackage+`"`)
-	re = regexp.MustCompile(`android:name="` + regexp.QuoteMeta(oldPackage) + `\.`)
-	updatedData = re.ReplaceAllString(updatedData, `android:name="`+until.FixedPackage+`.`)
-
-	// 写回文件
-	err = os.WriteFile(buildSourceDir+"/AndroidManifest.xml", []byte(updatedData), 0644)
-	if err != nil {
-		log.Println("[!]写入AndroidManifest.xml文件失败:", err)
-		return false
-	}
-
-	if !until.Exists(buildSourceDir + "/apktool.yml") {
-		log.Println("[!]找不到apktool.yml文件")
-		return false
-	}
-
-	log.Println("[*]修改 apktool.xml ...")
-	apktoolData, err := os.ReadFile(buildSourceDir + "/apktool.yml")
-	if err != nil {
-		log.Println("[!]读取apktool.xml文件失败:", err)
-		return false
-	}
-
-	re = regexp.MustCompile(`renameManifestPackage:.*`)
-	updatedApktoolData := re.ReplaceAllString(string(apktoolData), `renameManifestPackage: '`+until.FixedPackage+`'`)
-	re = regexp.MustCompile(`apkFileName:.*`)
-	updatedApktoolData = re.ReplaceAllString(updatedApktoolData, `apkFileName: `+apkName+`.apk`)
-	re = regexp.MustCompile(`versionName:.*`)
-	updatedApktoolData = re.ReplaceAllString(updatedApktoolData, `versionName: `+apkVersion+``)
-	// 写回文件
-	err = os.WriteFile(buildSourceDir+"/apktool.yml", []byte(updatedApktoolData), 0644)
-	if err != nil {
-		log.Println("[!]写入apktool.xml文件失败:", err)
-		return false
-	}
-
-	log.Println("[*]修改 strings.xml ...")
-
-	if !until.Exists(buildSourceDir + "/res/values/strings.xml") {
-		log.Println("[!]找不到strings.xml文件")
-		return false
-	}
-	stringData, err := os.ReadFile(buildSourceDir + "/res/values/strings.xml")
-	if err != nil {
-		log.Println("[!]读取strings.xml文件失败:", err)
-		return false
-	}
-
-	re = regexp.MustCompile(`<string name="app_name">.*?</string>`)
-	updatedStringData := re.ReplaceAllString(string(stringData), `<string name="app_name">`+apkName+`</string>`)
-	// 写回文件
-	err = os.WriteFile(buildSourceDir+"/res/values/strings.xml", []byte(updatedStringData), 0644)
-	if err != nil {
-		log.Println("[!]写入strings.xml文件失败:", err)
-		return false
-	}
-
-	log.Println("[*]修改 smali 结构 ...")
-
-	// 替换smali文件中的包名
-	oldPath := strings.ReplaceAll(oldPackage, ".", "/")
-	newPath := strings.ReplaceAll(until.FixedPackage, ".", "/")
-
-	if err := movePackageDir(buildSourceDir+"/smali/", oldPath, newPath); err != nil {
-		log.Println("[!]移动应用代码目录失败:", err)
-		return false
-	}
-
-	if err := replaceSmaliPackage(buildSourceDir+"/smali/", oldPackage, until.FixedPackage); err != nil {
-		log.Println("[!]替换应用代码标识失败:", err)
-		return false
-	}
+	log.Println("客户端APK编译完成:", apkPath)
 	return true
 }
 
@@ -313,69 +118,6 @@ func replaceSmaliPackage(smaliDir, oldPackage, newPackage string) error {
 		}
 		return nil
 	})
-}
-
-func replaceHost(smaliDir, newHost string) error {
-	// 正则匹配 const-string v0, "xxx/iptv"
-	re := regexp.MustCompile(`(const-string\s+v0,\s*").*/iptv`)
-
-	return filepath.WalkDir(smaliDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && filepath.Ext(path) == ".smali" {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			// 替换 host 部分
-			updated := re.ReplaceAllString(string(data), `${1}`+newHost+`/apk`)
-			err = os.WriteFile(path, []byte(updated), 0644)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-func replaceSign(buildSource string, appSign int64) error {
-	// 转为十六进制字符串
-	hexValue := fmt.Sprintf("0x%x", appSign)
-
-	// 找到 SplashActivity.smali 文件
-	var targetFile string
-	err := filepath.WalkDir(filepath.Join(buildSource, "smali"), func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && filepath.Base(path) == "SplashActivity.smali" {
-			targetFile = path
-			return filepath.SkipDir // 找到后停止遍历
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if targetFile == "" {
-
-		return errors.New("[!]找不到 SplashActivity.smali 文件")
-	}
-
-	// 读取文件内容
-	data, err := os.ReadFile(targetFile)
-	if err != nil {
-		return err
-	}
-
-	// 替换 const/16 v0 的值
-	oldLine := `const/16 v0, 0x301b`
-	newLine := `const/16 v0, ` + hexValue
-	updated := strings.ReplaceAll(string(data), oldLine, newLine)
-
-	// 写回文件
-	return os.WriteFile(targetFile, []byte(updated), 0644)
 }
 
 func movePackageDir(workDir, oldPackagePath, newPackagePath string) error {
@@ -409,4 +151,34 @@ func movePackageDir(workDir, oldPackagePath, newPackagePath string) error {
 	}
 
 	return nil
+}
+
+// clientBgDir 是上传的启动背景图目录；编译期会挑其中一张打进包内。
+const clientBgDir = "/config/images/bj"
+
+// clientIconPath 返回上传的 logo；没上传返回空串（保留包内默认图）。
+func clientIconPath() string {
+	p := "/config/images/icon/icon.png"
+	if !until.Exists(p) {
+		return ""
+	}
+	return p
+}
+
+// clientBackgroundPath 返回要打进包的启动背景；没上传返回空串。
+//
+// 刻意**不**在这里随机挑图（until.GetBg 会随机）：
+// 打进包里的那张必须是稳定的一张，否则同一版 APK 在不同机器上 logo/背景不一致，
+// 用户会当成"发了不同的版本"。
+func clientBackgroundPath() string {
+	if !until.Exists(clientBgDir) {
+		return ""
+	}
+	picks, err := filepath.Glob(filepath.Join(clientBgDir, "*.png"))
+	if err != nil || len(picks) == 0 {
+		return ""
+	}
+	// 按文件名排序取第一个：与 GetBg 的随机策略相反，编译期要的是可复现。
+	slices.Sort(picks)
+	return picks[0]
 }

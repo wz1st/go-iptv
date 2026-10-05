@@ -10,7 +10,11 @@ VOLUME /config
 EXPOSE 80
 
 COPY apktool/apktool apktool/apktool.jar /usr/bin/
-COPY client /client
+# 编译基底：只拷两个文件，落点必须与 until.ClientDir（/app/client）一致。
+# 早先这里是 `COPY client /client`，那棵树是 apktool 解包产物（56MB / 3500+ 文件），
+# 编译时靠正则改 smali —— 对 smali 结构敏感，apk 一重编译指令挪位就悄悄匹配不上。
+# 现在改成拷基包 APK，编译时才解包并改 string 资源，见 until/clientBuild.go。
+COPY client/Client.apk client/Version_client /app/client/
 COPY database /app/database
 COPY logo /app/logo
 COPY mytv /app/mytv

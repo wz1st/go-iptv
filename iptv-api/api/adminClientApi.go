@@ -105,3 +105,19 @@ func BuildStatus(c *gin.Context) {
 func ClientPublish(c *gin.Context) {
 	reply(c, service.PublishAPK())
 }
+
+// ClientUploadBaseApk 上传客户端的编译基底 APK（multipart/form-data，字段名 apkfile）。
+// 只接受**指定包名**（与镜像出厂基包同包名），否则编出来的包登录时解不开响应。
+func ClientUploadBaseApk(c *gin.Context) {
+	reply(c, service.UploadClientBase(c))
+}
+
+// ClientCheckBase 在线检查客户端编译基底的最新版本（远端 client-vX.Y.Z 序列）。
+func ClientCheckBase(c *gin.Context) {
+	reply(c, service.CheckClientBaseUpdate())
+}
+
+// ClientUpgradeBase 在线下载并替换客户端编译基底。
+func ClientUpgradeBase(c *gin.Context) {
+	reply(c, service.UpgradeClientBase())
+}

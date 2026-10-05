@@ -155,6 +155,12 @@ var adminRoutes = []apiRoute{
 	{"client/uploadIcon", api.ClientUploadIcon},
 	{"client/uploadBj", api.ClientUploadBj},
 
+	// 编译基底（底包）：独立于 apk 版本的 client-vX.Y.Z 序列。
+	// uploadBaseApk 是 multipart，字段名 apkfile。
+	{"client/uploadBaseApk", api.ClientUploadBaseApk},
+	{"client/checkBase", api.ClientCheckBase},
+	{"client/upgradeBase", api.ClientUpgradeBase},
+
 	// 公告：它保存的就是客户端启动时弹出的那条文案（显示时长、显示间隔都是
 	{"client/noticeData", api.NoticeData},
 	{"client/noticeSave", api.Notice},
