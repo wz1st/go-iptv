@@ -13,9 +13,11 @@ import (
 
 var Sale = "AD80F93B542B"
 
-// FixedPackage 是 APK 包名，写死在服务端。改它等于换一个应用：
-// 存量设备升不了级、授权记录也接不上。原在 bootstrap，因 GetAesKey 也要用而下沉至此。
-const FixedPackage = "cn.v1st.player"
+// FixedPackage 是 APK 包名，写死在服务端，同时决定 GetAesKey 的派生结果。
+// 改它等于换一个应用：存量设备升不了级、授权记录也接不上。
+// 2026-10-05 随编译基底换成基包 APK（xyz.qingh.qhtv）由 cn.v1st.player 统一过来，
+// 客户端 Constants.DERIVE_PACKAGE 必须同步，否则登录时解不开密钥、且不报错。
+const FixedPackage = "xyz.qingh.qhtv"
 
 // FixedAppSign 是 APK 的应用签名，原为 config.yml 的 build.sign。
 // 它是 GetAesKey 的输入之一，改值会让已加密数据全部解不开。
