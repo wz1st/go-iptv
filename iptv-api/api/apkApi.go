@@ -60,7 +60,10 @@ func GetChannels(c *gin.Context) {
 		return
 	}
 
-	if strings.Contains(channel.Mac, "获取地址失败") {
+	// 取不到 MAC 的设备，登录时已把 mac 回落成 androidid 建了账号，
+	// 这里必须能把同一个身份找回来，否则查库落空 ⇒ 下发「该套餐无频道」。
+	// 两种非正常 mac 都要能回落：失败提示串（老客户端）与空串。
+	if strings.Contains(channel.Mac, "获取地址失败") || channel.Mac == "" {
 		channel.Mac = channel.DeviceID
 	}
 
