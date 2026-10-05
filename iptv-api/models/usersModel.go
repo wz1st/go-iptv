@@ -2,8 +2,13 @@ package models
 
 // iptv_users —— 客户端设备表。
 type IptvUser struct {
-	ID         int64  `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	Name       int64  `gorm:"column:name" json:"name"` // 设备名（业务键；批量操作传的就是它，不是主键 id）
+	ID int64 `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	// 设备名（业务键；批量操作传的就是它，不是主键 id）。
+	//
+	// 2026-10-04 起新装设备写**客户端 androidid 原文**（如 f8145fb34e8f5d91），
+	// 不再写 genName() 生成的随机数。存量记录保持原样 —— 登录是按 mac 查用户，
+	// 老设备下次登录仍命中旧行，name 不变，所以无需回填。
+	Name       string `gorm:"column:name" json:"name"`
 	Mac        string `gorm:"column:mac" json:"mac"`
 	DeviceID   string `gorm:"column:device_id" json:"deviceId"`
 	Model      string `gorm:"column:model" json:"model"`
@@ -28,8 +33,9 @@ type IptvUser struct {
 }
 
 type IptvUserShow struct {
-	ID         int    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	Name       int64  `gorm:"column:name" json:"name"`
+	ID int `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	// 与 [IptvUser.Name] 同类型：历史行是随机数字，新行是 androidid 原文。
+	Name       string `gorm:"column:name" json:"name"`
 	Mac        string `gorm:"column:mac" json:"mac"`
 	DeviceID   string `gorm:"column:device_id" json:"deviceId"`
 	Model      string `gorm:"column:model" json:"model"`

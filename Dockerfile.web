@@ -10,7 +10,7 @@ VOLUME /config
 EXPOSE 80
 
 COPY apktool/apktool apktool/apktool.jar /usr/bin/
-COPY client /client
+COPY client/Client.apk client/Version_client /app/client/
 COPY database /app/database
 COPY logo /app/logo
 COPY mytv /app/mytv
@@ -61,7 +61,14 @@ RUN apk add --no-cache \
  && ln -s ${ANDROID_HOME}/build-tools/apksigner /usr/local/bin/apksigner \
  && ln -s ${ANDROID_HOME}/build-tools/zipalign /usr/local/bin/zipalign \
  && sed -i 's/\r$//' /usr/bin/apktool \
- && chmod +x /usr/bin/apktool /usr/bin/apktool.jar
+ && chmod +x /usr/bin/apktool /usr/bin/apktool.jar \
+ && rm -rf ${ANDROID_HOME}/build-tools/samples \
+           ${ANDROID_HOME}/build-tools/docs \
+           ${ANDROID_HOME}/build-tools/NOTICE.txt \
+           ${ANDROID_HOME}/build-tools/source.properties.bak \
+ && find ${ANDROID_HOME}/build-tools -maxdepth 1 -type f \
+        \( -name '*.txt' -o -name '*.md' -o -name '*.html' \) -delete \
+ && rm -rf /root/.cache /tmp/* 2>/dev/null || true
 
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
 COPY nginx/proxy_params.inc /etc/nginx/conf.d/proxy_params.inc
@@ -72,19 +79,12 @@ COPY --chmod=0755 iptv_all/iptv_amd64 /app/iptv
 COPY --chmod=0755 engine_all/engine_amd64 /app/engine
 COPY --chmod=0755 start_all/start_amd64 /app/start
 
-# 原始产物副本。运行目录里的产物被换坏、或被卷里的旧包降级时，启动器拿它恢复回
-# 镜像版本。/app 是容器可写层，docker restart 抹不掉升级写进去的东西，只有重建容器
-# 才回得来 —— 这份副本让"回到镜像版本"变成每次启动自动完成的事。
 COPY --chmod=0755 iptv_all/iptv_amd64 /app/.image/iptv
 COPY --chmod=0755 engine_all/engine_amd64 /app/.image/engine
 
 ARG APP_VERSION=""
 COPY webdist /app/web
 
-# 镜像内置版本清单：启动器在"产物答不出自身版本"时拿它兜底（否则只能显示"未知"）。
-# 在**镜像内问产物自己**，保证清单与镜像里那份产物严格同源、不会各说各话。
-# api / 引擎的 `-version` 都在任何环境预检之前返回，构建期执行是安全的；
-# 前端没有可执行产物，从 index.html 的 meta 标记里读。
 RUN set -eu; \
     api=$(/app/iptv -version 2>/dev/null | tr -d '\r\n') || api=""; \
     eng=$(/app/engine -version 2>/dev/null | tr -d '\r\n') || eng=""; \

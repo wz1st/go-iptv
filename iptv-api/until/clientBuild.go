@@ -1,0 +1,375 @@
+package until
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+)
+
+// 客户端基底的解包 → 改写 → 重编译（**全程在 api 侧**）。
+//
+// 与 mytv 的差异：mytv 把编译甩给引擎（WS buildMyTV），客户端这边在本进程里
+// 直接跑 apktool。少一跳 WS 就少一处会静默失败的中间环节 —— 引擎那边
+// "收到了但没执行"的表现是前端一直转圈，而这里 exec 的错误当场就到手。
+//
+// ## 改写的三个值都是「string 资源」而不是「smali 常量」
+//
+// 服务端链接、应用名、版本号在 apk 源码侧是 Gradle 注入的 string 资源
+// （见 iptv-apk-rebuilt/core/data/build.gradle.kts 的 resValue）。
+// 它们在解包后就是 `res/values/strings.xml` 里的三行明文 ——
+// 改它们不需要理解 smali，也不需要在 dex 里做偏移重排。
+//
+// 早先的实现是把 `client/`（一整棵 apktool 解包树，含几千个 smali）烤进镜像，
+// 再用正则去改 smali 里的 `const-string v0, "xxx/iptv"` 与 `const/16 v0, 0x301b`。
+// 那种做法对 apktool 版本与 smali 结构敏感：apk 一重编译，指令挪个位置
+// 正则就悄悄匹配不上，编译照过、功能不对。现已改为「基包是编译好的 APK」。
+
+// 三个注入值的资源键名 —— 与 iptv-apk-rebuilt 的 core/data/build.gradle.kts
+// 逐字对应。服务端按**键名**找，不按字面量猜。
+const (
+	ResKeyServerHost = "qhtv_server_host"
+	ResKeyAppName    = "app_name"
+	ResKeyVersion    = "qhtv_version_name"
+)
+
+// ClientBuildValues 是一次编译要写进基底的三个值。
+type ClientBuildValues struct {
+	ServerURL string // 服务端基址，必须含 /apk 段
+	AppName   string // 应用显示名，参与登录密钥派生
+	Version   string // 对外版本号（纯数字，由调用方补成三位）
+	// VersionName 是写进 APK 的 versionName，缺省时用 基底版本 + "." + Version。
+	VersionName string
+	// IconPath 是上传的 logo；为空时保留包内默认图。
+	IconPath string
+	// BackgroundPath 是上传的启动背景；为空时保留包内默认图。
+	BackgroundPath string
+}
+
+// apktoolLowArgs 是低资源环境下的 apktool 参数。
+// 与旧 build.go 逐字一致：编译基底比编整棵树轻，但 dex 合并阶段同样吃内存。
+var apktoolLowArgs = []string{
+	"-JXmx128M",
+	"-JXX:+UseParallelGC",
+	"-JXX:+UseStringDeduplication",
+	"-JXX:ParallelGCThreads=2",
+	"-JDfile.encoding=utf-8",
+	"-JDjdk.util.zip.disableZip64ExtraFieldValidation=true",
+	"-JDjdk.nio.zipfs.allowDotZipEntry=true",
+}
+
+// BuildClientApk 从基底 APK 编译出一份新 APK。
+//
+// 流程：解包基底 → 改三个资源 + 图标/背景 → apktool 重编 → 对齐签名。
+// staged=true 产出待发布包，false 直接覆盖线上包。
+//
+// 返回值是给调用方写进日志的摘要；失败一律带原因，调用方直接回给前端。
+func BuildClientApk(baseApk, outApk, workDir string, v ClientBuildValues) error {
+	if err := validateClientValues(v); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(outApk), 0755); err != nil {
+		return fmt.Errorf("apk 输出目录创建失败: %v", err)
+	}
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		return fmt.Errorf("编译目录创建失败: %v", err)
+	}
+
+	// 解包基底：apktool 对已签名 APK 直接 d 会因"重复签名"失败，
+	// 所以必须先拿掉 META-INF 的签名文件（这不影响可安装性，重编时会重新签）。
+	if out, err := runTool("apktool", append([]string{"d", "-f", "-o", workDir, baseApk}, apktoolDecodeArgs()...)...); err != nil {
+		return fmt.Errorf("解包基底 APK 失败: %v\n%s", err, out)
+	}
+
+	if err := rewriteClientResources(workDir, v); err != nil {
+		return err
+	}
+	if err := applyClientImages(workDir, v); err != nil {
+		return err
+	}
+	if err := setClientVersionName(workDir, v); err != nil {
+		return err
+	}
+
+	args := []string{"b", workDir, "-o", outApk}
+	if IsLowResource() || os.Getenv("LOWOS") == "true" {
+		args = append(apktoolLowArgs, args...)
+	}
+	if out, err := runTool("apktool", args...); err != nil {
+		return fmt.Errorf("编译 APK 失败: %v\n%s", err, out)
+	}
+
+	if err := signClientApk(outApk, workDir); err != nil {
+		return err
+	}
+	return nil
+}
+
+// apktoolDecodeArgs 是解包时的额外参数。
+// `-r` 不解资源会让我们改不到 strings.xml，所以不能要；
+// 这里显式写出来是为了让"为什么不加 -r"有个记录。
+func apktoolDecodeArgs() []string {
+	return []string{"-o"}
+}
+
+// validateClientValues 在动文件之前把不合法挡掉。
+// 三个值任一为空都会产出"装得上但连不上/显示空白/无法升级"的包 ——
+// 那类包发出去之后唯一的症状是用户投诉，事前失败便宜得多。
+func validateClientValues(v ClientBuildValues) error {
+	if strings.TrimSpace(v.ServerURL) == "" {
+		return fmt.Errorf("服务端地址不能为空")
+	}
+	if !strings.HasSuffix(strings.TrimRight(v.ServerURL, "/"), "/apk") {
+		// nginx 只对 ^/(apk|mytv|getRss|ku9|epg|r|k)/ 反代，少了 /apk 段
+		// 拼出的 /apk/login 会落到 SPA 返回 HTML，客户端表现为"登录失败"，
+		// 而服务端日志里看不到任何错误 —— 所以在这儿就说清。
+		return fmt.Errorf("服务端地址必须以 /apk 结尾（当前是 %s）", v.ServerURL)
+	}
+	if strings.TrimSpace(v.AppName) == "" {
+		return fmt.Errorf("应用名不能为空")
+	}
+	if strings.TrimSpace(v.Version) == "" {
+		return fmt.Errorf("版本号不能为空")
+	}
+	return nil
+}
+
+// rewriteClientResources 改写 res/values/strings.xml 里的三个注入值。
+func rewriteClientResources(workDir string, v ClientBuildValues) error {
+	// apktool 解包后资源按 density 分桶，strings.xml 可能在 values/，
+	// 也可能在 values-XX/。哪个存在改哪个，全都不存在才报错 ——
+	// 直接写 values/ 会得到"编译过了但值没变"的静默失败。
+	found := false
+	for _, dir := range resValueDirs(workDir) {
+		f := filepath.Join(dir, "strings.xml")
+		if !Exists(f) {
+			continue
+		}
+		found = true
+		if err := patchStringXml(f, map[string]string{
+			ResKeyServerHost: v.ServerURL,
+			ResKeyAppName:    v.AppName,
+			ResKeyVersion:    v.versionName(),
+		}); err != nil {
+			return fmt.Errorf("改写 %s 失败: %v", f, err)
+		}
+	}
+	if !found {
+		return fmt.Errorf(
+			"基底 APK 里找不到 strings.xml —— 这不是一个用本工程编译出来的基包，"+
+				"请上传含 %s / %s / %s 三个资源键的基底",
+			ResKeyServerHost, ResKeyAppName, ResKeyVersion)
+	}
+	return nil
+}
+
+// resValueDirs 列出可能持有 strings.xml 的资源目录。
+// 顺序固定：默认桶在前，保证"只有默认桶有值"时结果可预期。
+func resValueDirs(workDir string) []string {
+	res := filepath.Join(workDir, "res")
+	dirs := []string{filepath.Join(res, "values")}
+
+	entries, err := os.ReadDir(res)
+	if err != nil {
+		return dirs
+	}
+	// 排序保证同一份输入每次都按同样顺序处理，避免"改到哪个桶"不可预期。
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "values-") {
+			names = append(names, e.Name())
+		}
+	}
+	slices.Sort(names)
+	for _, n := range names {
+		dirs = append(dirs, filepath.Join(res, n))
+	}
+	return dirs
+}
+
+// patchStringXml 按**资源键名**替换字符串值。
+//
+// 刻意不用字面量匹配旧值：字面量会随默认值调整而变（客户端把兜底地址从
+// 10.10.220.161 改成 .162 是很正常的改动），按值匹配会在那天突然"改不动"。
+var stringRe = regexp.MustCompile(`(?s)<string name="([^"]*)"[^>]*>(.*?)</string>`)
+
+func patchStringXml(path string, want map[string]string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	src := string(data)
+
+	hit := map[string]bool{}
+	out := stringRe.ReplaceAllStringFunc(src, func(m string) string {
+		sub := stringRe.FindStringSubmatch(m)
+		if len(sub) != 3 {
+			return m
+		}
+		v, ok := want[sub[1]]
+		if !ok {
+			return m
+		}
+		hit[sub[1]] = true
+		// 保留原标签上的其余属性，只换正文。
+		open := m[:strings.Index(m, ">")+1]
+		return open + xmlEscape(v) + "</string>"
+	})
+
+	var missing []string
+	for k := range want {
+		if !hit[k] {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		slices.Sort(missing)
+		return fmt.Errorf("缺少资源键 %s（这个基包不是本工程编出来的）",
+			strings.Join(missing, ", "))
+	}
+
+	// 原子写：中途失败会留下半截 XML，apktool 后续报错很难指向真因。
+	return WriteFileAtomic(path, out, 0644)
+}
+
+// xmlEscape 转义会破坏 XML 的字符。应用名是管理员填的，
+// 填个 `&` 或 `<` 就该报"名字不合法"而不是让整个编译崩在一个 XML 解析错误上。
+func xmlEscape(s string) string {
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+	return r.Replace(s)
+}
+
+// applyClientImages 用上传的图覆盖包内默认图；没上传就保留默认图。
+//
+// 目标资源名是**对外契约**（客户端 tv/src/main/java/.../ui/splash/SplashScreen.kt
+// 读 R.drawable.icon 与 R.drawable.qh_bg）：
+//   - logo     res/drawable*/icon.png
+//   - 启动背景  res/drawable*/qh_bg.png
+//
+// 注意**只覆盖 drawable 目录下的同名文件**，不碰 mipmap-* / drawable-anydpi-*：
+// anydpi 桶里的同名资源优先级最高，覆盖它反而会在部分设备上不生效。
+//
+// **没上传时不复制任何东西** —— 这正是"未上传则用当前默认图"的实现方式，
+// 不要为了"统一"而无脑复制包内文件，那只会平白产生一次 IO。
+func applyClientImages(workDir string, v ClientBuildValues) error {
+	if err := overlayImage(workDir, "icon", v.IconPath); err != nil {
+		return err
+	}
+	if err := overlayImage(workDir, "qh_bg", v.BackgroundPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+// overlayImage 把一张图覆盖到 res 下所有 drawable 桶的 <name>.png。
+//
+// 覆盖**所有密度桶**（drawable、drawable-hdpi、drawable-xhdpi…）而不是只改一个：
+// 电视设备横跨 ldpi 到 xxxhdpi，只改一个桶的话高密度屏上 logo 会变回默认图，
+// 而这种"部分设备对、部分设备不对"的现象极难定位。
+//
+// **跳过 anydpi 桶**：它的资源在密度选择里优先级最高，覆盖它会在部分设备上
+// 与其它桶打架，出现"换了图却没变化"或"图变形"。客户端默认图只放在 drawable/。
+func overlayImage(workDir, name, src string) error {
+	if strings.TrimSpace(src) == "" {
+		return nil
+	}
+	if !Exists(src) {
+		return fmt.Errorf("图片不存在: %s", src)
+	}
+	resRoot := filepath.Join(workDir, "res")
+	entries, err := os.ReadDir(resRoot)
+	if err != nil {
+		return fmt.Errorf("读取 res 目录失败: %v", err)
+	}
+	hit := 0
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "drawable") {
+			continue
+		}
+		if strings.Contains(e.Name(), "anydpi") {
+			continue
+		}
+		dst := filepath.Join(resRoot, e.Name(), name+".png")
+		// 只覆盖**已存在**的同名文件：新建一个 drawable-xxhdpi/icon.png
+		// 会让 aapt 在某些配置下选到它，在电视上表现为图变糊。
+		if !Exists(dst) {
+			continue
+		}
+		if err := CopyFileAtomic(src, dst, 0644); err != nil {
+			return fmt.Errorf("覆盖 %s 失败: %v", dst, err)
+		}
+		hit++
+	}
+	if hit == 0 {
+		return fmt.Errorf(
+			"基底 APK 的 res 下找不到 %s.png —— 上传的图无处可放，"+
+				"请确认基包是用本工程编译的", name)
+	}
+	return nil
+}
+
+// setClientVersionName 把对外版本号写进 apktool.yml。
+//
+// **只改 versionName，不动 versionCode**：versionCode 决定能否覆盖安装，
+// 把它重置成 1 会让已装过新版的设备装不上（系统按 code 拦下降级安装）。
+func setClientVersionName(workDir string, v ClientBuildValues) error {
+	p := filepath.Join(workDir, "apktool.yml")
+	if !Exists(p) {
+		return fmt.Errorf("基底 APK 里找不到 apktool.yml，不是可改写的编译基底")
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	re := regexp.MustCompile(`versionName:.*`)
+	out := re.ReplaceAllString(string(data), "versionName: "+v.versionName())
+	return WriteFileAtomic(p, out, 0644)
+}
+
+// v.versionName 组装写进 APK 的 versionName。
+func (v ClientBuildValues) versionName() string {
+	if strings.TrimSpace(v.VersionName) != "" {
+		return v.VersionName
+	}
+	return strings.TrimSpace(v.Version)
+}
+
+// signClientApk 给编译产物签名。keytool 生成临时 keystore，jarsigner 签。
+//
+// 签名是必须的：不签的 APK 装不上（Android 要求每个 APK 都有 v1 签名）。
+// 用临时 keystore 而非打包进镜像的 keystore.p12：基底包与发行包用不同密钥，
+// 升级链才不会因为密钥不同而被系统判成"另一个应用"。
+func signClientApk(apkPath, workDir string) error {
+	key := filepath.Join(workDir, "auto_keystore.jks")
+	const alias = "iptvkey"
+
+	gen := exec.Command("keytool", "-genkey", "-v",
+		"-keystore", key, "-alias", alias,
+		"-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
+		"-storepass", "123456", "-keypass", "123456",
+		"-dname", "CN=Auto, OU=Dev, O=Company, L=City, S=State, C=CN")
+	if out, err := gen.CombinedOutput(); err != nil {
+		return fmt.Errorf("生成签名失败: %v\n%s", err, out)
+	}
+
+	sign := exec.Command("jarsigner",
+		"-sigalg", "SHA256withRSA", "-digestalg", "SHA-256",
+		"-keystore", key, "-storepass", "123456", "-keypass", "123456",
+		apkPath, alias)
+	if out, err := sign.CombinedOutput(); err != nil {
+		return fmt.Errorf("签名失败: %v\n%s", err, out)
+	}
+	return nil
+}
+
+// runTool 跑一个外部工具并把输出带回来。
+// apktool 的报错全在 stdout/stderr，丢���输出就只剩一个 exit code，
+// 排查时等于两眼一抹黑。
+func runTool(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}

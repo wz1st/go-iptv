@@ -57,6 +57,9 @@ func ApkLogin(user models.IptvUser) dto.LoginRes {
 	var cfg = dao.GetConfig()
 
 	result.IP = user.IP
+	// 账号以 json 字符串下发。客户端 `ServerConfig.accountId` 声明为 String，
+	// 这里若下发数字会触发 kotlinx 的宽松解析（能读但会留字符串原文的坑），
+	// 两边统一成字符串。
 	result.ID = user.Name
 	result.Status = user.Status
 	result.NetType = user.NetType
@@ -71,11 +74,14 @@ func ApkLogin(user models.IptvUser) dto.LoginRes {
 	result.DataURL = cfg.ServerUrl + "/apk/channels"
 	result.AppURL = cfg.ServerUrl + "/app/" + cfg.Build.Name + ".apk"
 	result.ShowTime = cfg.Ad.ShowTime
-	result.TipUserNoReg = "当前账号 " + strconv.FormatInt(user.Name, 10) + " " + cfg.Tips.UserNoReg
-	result.TipUserExpired = "当前账号 " + strconv.FormatInt(user.Name, 10) + " " + cfg.Tips.UserExpired
-	result.TipUserForbidden = "当前账号 " + strconv.FormatInt(user.Name, 10) + " " + cfg.Tips.UserForbidden
+	result.TipUserNoReg = "当前账号 " + user.Name + " " + cfg.Tips.UserNoReg
+	result.TipUserExpired = "当前账号 " + user.Name + " " + cfg.Tips.UserExpired
+	result.TipUserForbidden = "当前账号 " + user.Name + " " + cfg.Tips.UserForbidden
 	result.AdInfo = "作者博客: www.qingh.xyz"
-	result.RandKey = until.Md5(time.Now().Format("20060102150405") + strconv.FormatInt(user.Name, 10))
+	// RandKey 参与频道数据解密。存量账号是随机数字串（如 "210079"），
+	// 改类型后拼接结果与旧的 strconv.FormatInt(name, 10) **逐字相同**，
+	// 所以存量设备换到新二进制后仍能解开自己那份数据 —— 这条不能动。
+	result.RandKey = until.Md5(time.Now().Format("20060102150405") + user.Name)
 
 	return getUserInfo(user, result)
 }
@@ -124,13 +130,28 @@ func GetChannels(channel dto.DataReqDto, base string) string {
 	dao.DB.Model(&models.IptvCategory{}).Where("id in ? and enable = ?", cList, 1).Order("sort asc").Find(&categoryList)
 
 	cfg := dao.GetConfig()
+	// 台标是**相对路径**（/logo/xxx.png，见 until.EpgNameGetLogo），
+	// 客户端拿不到就直接显示不出来，所以这里补成绝对地址。
+	// base 只在能识别出合法 Host 时才有效，取不到时回落到配置的 ServerUrl ——
+	// 与 adminBase 同口径，避免反代/裸 IP 场景下台标整批失效。
+	logoBase := base
+	if logoBase == "" {
+		logoBase = strings.TrimRight(cfg.ServerUrl, "/")
+	}
 	for _, v := range categoryList {
 		var tmpData []dto.ChannelData
 		var i int64 = 1
 		var dataMap = make(map[string][]string)
+		var logoMap = make(map[string]string)
 		var tmpMap = make(map[string]int64)
 
 		for _, channel := range until.CaGetChannels(v, false, base) {
+			// 同一频道名的多条线路共用一份台标，取第一条非空的。
+			// 之所以按名字而不是按线路存：dataMap 本来就是按名字聚合的，
+			// 台标跟着名字走才不会在多线路频道上丢图。
+			if cur := logoMap[channel.Name]; cur == "" && channel.Logo != "" {
+				logoMap[channel.Name] = logoBase + channel.Logo
+			}
 			if v.Proxy && cfg.Proxy.Status == 1 && strings.TrimSpace(channel.PUrl) != "" {
 				dataMap[channel.Name] = append(dataMap[channel.Name], strings.TrimSpace(channel.PUrl))
 				if _, ok := tmpMap[channel.Name]; !ok {
@@ -151,6 +172,7 @@ func GetChannels(channel dto.DataReqDto, base string) string {
 				Num:    v1,
 				Name:   k,
 				Source: dataMap[k],
+				Logo:   logoMap[k],
 			})
 		}
 
@@ -241,12 +263,12 @@ func getUserInfo(user models.IptvUser, result dto.LoginRes) dto.LoginRes {
 
 	if cfg.App.NeedAuthor == 0 {
 		result = getMealName(user, result)
-		log.Printf("用户: %d 登录成功,IP: %s 设备ID: %s 套餐: %s \n", result.ID, result.IP, user.DeviceID, result.MealName)
+		log.Printf("用户: %s 登录成功,IP: %s 设备ID: %s 套餐: %s \n", result.ID, result.IP, user.DeviceID, result.MealName)
 	} else if cfg.App.NeedAuthor == 1 && user.Status != -1 {
 		result = getMealName(user, result)
-		log.Printf("用户: %d 登录成功,IP: %s 设备ID: %s 套餐: %s\n", result.ID, result.IP, user.DeviceID, result.MealName)
+		log.Printf("用户: %s 登录成功,IP: %s 设备ID: %s 套餐: %s\n", result.ID, result.IP, user.DeviceID, result.MealName)
 	} else {
-		log.Printf("用户: %d 登录成功,IP: %s 设备ID: %s 未授权 \n", result.ID, result.IP, user.DeviceID)
+		log.Printf("用户: %s 登录成功,IP: %s 设备ID: %s 未授权 \n", result.ID, result.IP, user.DeviceID)
 	}
 
 	return result
@@ -319,7 +341,7 @@ func AddUser(user dto.ApkUser, ip string) models.IptvUser {
 	var cfg = dao.GetConfig()
 
 	dbData := models.IptvUser{
-		Name:     int64(genName()),
+		Name:     genName(user),
 		Mac:      user.Mac,
 		DeviceID: user.DeviceID,
 		Model:    user.Model,
@@ -344,17 +366,47 @@ func AddUser(user dto.ApkUser, ip string) models.IptvUser {
 	return dbData
 }
 
-func genName() int {
-	name := rand.Intn(999999-1000+1) + 1000 // 生成 1000~999999 之间的随机数
-	var count int64
-	err := dao.DB.Model(&models.IptvUser{}).Where("name = ?", name).Count(&count).Error
-	if err != nil {
-		panic(err)
+// genName 生成设备账号。
+//
+// 客户端上报 `androidid`（真设备 ID）后，账号就用它 —— 用户在后台一眼能认出
+// 「这个账号就是这台机器」，不再是一串无从对应的随机数。
+//
+// 两点必须注意：
+//  1. 取不到设备 ID（客户端老版本、或 ANDROID_ID 取不到）时退回旧的随机数，
+//     登录不因此失败。
+//  2. 随机数分支的递归在极端碰撞下会栈溢出（1000~999999 空间、约 90 万条
+//     数据时生日碰撞已不罕见）。改为循环 + 上限，撞满就线性探测。
+func genName(user dto.ApkUser) string {
+	if id := strings.TrimSpace(user.DeviceID); id != "" {
+		return id
 	}
+	return randomName()
+}
 
-	if count == 0 {
-		return name
-	} else {
-		return genName() // 递归调用
+func randomName() string {
+	// 线性探测：先随机若干次，仍撞名就顺序往后找，不再无限递归。
+	for i := 0; i < 32; i++ {
+		name := int64(rand.Intn(999999-1000+1) + 1000) // 1000~999999
+		var count int64
+		if err := dao.DB.Model(&models.IptvUser{}).Where("name = ?", strconv.FormatInt(name, 10)).Count(&count).Error; err != nil {
+			// 查库失败时不能当"没撞名"——那会写出重复账号。这里保守地当成撞名，继续探测。
+			log.Println("genName 查询账号占用失败: " + err.Error())
+			continue
+		}
+		if count == 0 {
+			return strconv.FormatInt(name, 10)
+		}
 	}
+	// 32 次随机都没空位，说明号码空间快满了，顺序找一个。
+	for name := int64(1000); name < 999999; name++ {
+		var count int64
+		if err := dao.DB.Model(&models.IptvUser{}).Where("name = ?", strconv.FormatInt(name, 10)).Count(&count).Error; err != nil {
+			log.Println("genName 顺序探测失败: " + err.Error())
+			return strconv.FormatInt(name, 10)
+		}
+		if count == 0 {
+			return strconv.FormatInt(name, 10)
+		}
+	}
+	return strconv.FormatInt(int64(rand.Intn(999999-1000+1)+1000), 10)
 }

@@ -1,0 +1,94 @@
+name: 发布客户端编译基底
+
+# 触发：推送 client-vX.Y.Z 标签。
+#
+# 四个发布序列同仓不同前缀，各自独立演进：
+#   vX.Y.Z         api 本体
+#   engine-vX.Y.Z  引擎
+#   mytv-vX.Y.Z    mytv 编译基底
+#   client-vX.Y.Z  客户端编译基底（本文件）
+#
+# **只发基底，不编发行包**：发行包由使用方（iptv-api 的「客户端设置」）拿基底
+# 在自己那边解包改写后编译出来 —— 服务端链接、应用名、版本号都是运行期才知道的值，
+# 编进 CI 就等于把每个部署方的配置都焊进一个包里。
+#
+# ## ⚠️ 本文件已不是正常路径
+#
+# 正常路径：APK 在 **iptv-apk 仓**编译，由那边的
+# .github/workflows/client-release.yml 推 client/ 到本仓并发 Releases。
+# 本仓不做任何编译 —— 它连 Gradle 文件都没有，只读已有的 client/ 目录。
+#
+# 本文件保留的唯一场景：没配 CI 时，人工往本仓 client/ 目录塞好包，
+# 再打 client-vX.Y.Z 标签触发转发。
+# **不要在本仓新建 client/ 目录的 CI 编译流程** —— 两个仓各编一次会分叉，
+# 而分叉的后果是"基包和正式包不是同一份源码"，排查要跨两个仓。
+on:
+  push:
+    tags:
+      - 'client-v[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '基底版本号（client-vX.Y.Z）'
+        required: true
+
+permissions:
+  contents: write
+
+# 同一序列排队而非并行：并行发两版会互相覆盖同名资产，最后留下哪一份说不清。
+concurrency:
+  group: client-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.version || github.ref }}
+
+      # 标签、Version_client、Client.apk 三者必须自洽：
+      # api 侧 until/clientOnline.go 会把 Version_client 与标签逐字比对，
+      # 对不上直接拒绝安装（见 DownloadClientBase）。宁可发布失败，也不要发一份
+      # "版本号和内容对不上"的基底 —— 那会让所有在线升级的用户卡在原地。
+      - name: 校验基底版本号
+        id: check
+        run: |
+          set -e
+          TAG="${{ github.event.inputs.version || github.ref_name }}"
+          V="$(printf '%s' "$TAG" | sed 's/^client-v//')"
+          printf '%s' "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::标签必须是 client-vX.Y.Z（收到 $TAG）"; exit 1; }
+          FILE_V="$(tr -d ' \r\n' < client/Version_client)"
+          if [ "$FILE_V" != "$V" ]; then
+            echo "::error::client/Version_client 写的是 $FILE_V，标签是 $V，两者必须一致"
+            exit 1
+          fi
+          [ -s client/Client.apk ] || { echo "::error::client/Client.apk 不存在或为空"; exit 1; }
+          [ "$(head -c2 client/Client.apk)" = "PK" ] || { echo "::error::client/Client.apk 缺 PK 魔数，不是合法 APK"; exit 1; }
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$V" >> $GITHUB_OUTPUT
+
+      # 基包里那三个注入值是服务端编译时会覆写的，基底本身用什么值都能装。
+      # 这里只做提示，不做门禁 —— 挡下来反而会让人为了过 CI 去改源码。
+      - name: 提示基底内的注入值
+        run: |
+          set -e
+          echo "基底内的服务端链接/应用名/版本号会在 api 侧编译时被覆写（见 until/clientBuild.go）"
+          echo "若基底是本工程构建的，它们来自 Gradle 属性 SERVER_HOST / APP_NAME / APP_VERSION"
+          echo "对应资源键：qhtv_server_host / app_name / qhtv_version_name"
+
+      # 资产名是外部契约：api 侧 until/clientBase.go 按 Client.apk / Version_client
+      # 逐字找，改名不会有报错，只会在用户点「在线升级」时变成"下载不到"。
+      - name: 发布基底到 go-iptv releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.check.outputs.tag }}
+          name: 客户端基底 ${{ steps.check.outputs.version }}
+          prerelease: false
+          overwrite_files: true
+          files: |
+            client/Client.apk
+            client/Version_client

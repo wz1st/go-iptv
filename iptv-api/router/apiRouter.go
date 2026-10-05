@@ -130,6 +130,14 @@ var adminRoutes = []apiRoute{
 	{"client/publish", api.ClientPublish},
 	{"client/uploadIcon", api.ClientUploadIcon},
 	{"client/uploadBj", api.ClientUploadBj},
+	// 客户端编译基底三件套（与 mytv 同构，但流程全在 api 侧，不经引擎）：
+	// 上传基包（multipart，字段名 apkfile）→ 校验包名 → 落 /config/client；
+	// 在线检查/升级远端 client-vX.Y.Z 序列（见 until/clientOnline.go）。
+	// logo 与启动背景不进这里：它们是**编译期**打进包的 drawable，
+	// 由后台的「上传图标 / 上传背景」提供，缺省则保留基包自带的默认图。
+	{"client/uploadBaseApk", api.ClientUploadBaseApk},
+	{"client/checkBase", api.ClientCheckBase},
+	{"client/upgradeBase", api.ClientUpgradeBase},
 
 	// 公告：它保存的就是客户端启动时弹出的那条文案（显示时长、显示间隔都是
 	{"client/noticeData", api.NoticeData},

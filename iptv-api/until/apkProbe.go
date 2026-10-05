@@ -94,21 +94,37 @@ func firstGroup(re *regexp.Regexp, s string) string {
 	return ""
 }
 
-var (
-	factoryPkgOnce sync.Once
-	factoryPkg     string
-)
-
 // MytvFactoryPackage 返回镜像出厂底包（/app/mytv/MyTV.apk）的包名。
 func MytvFactoryPackage() string {
-	factoryPkgOnce.Do(func() {
-		info, err := ProbeApk(MytvDir + "/MyTV.apk")
-		if err != nil {
-			return
-		}
-		factoryPkg = info.Package
-	})
-	return factoryPkg
+	return factoryPackage(MytvDir + "/MyTV.apk")
+}
+
+// factoryPkg 缓存「镜像出厂底包」的包名。mytv 与 client 各探自己的那份，
+// 用 map 分开存 —— 共用一个变量的话谁后调谁覆盖，准入校验会拿错包名，
+// 而错误的症状是"上传总被拒"或"该拒的没拒"，都不会报错，只会让人以为功能坏了。
+var (
+	factoryPkgMu     sync.Mutex
+	factoryPkgByPath = map[string]string{}
+)
+
+// factoryPackage 读一份 APK 的包名，按路径缓存。
+//
+// 缓存的理由与代价：aapt 每次起进程要几百毫秒，而包名在一份底包上**永不变**。
+// 代价是"装上新底包后仍报旧包名" —— 但调用方拿它做**准入校验**，
+// 用的必须是"镜像出厂那份"的包名（用户上传的旧底包不该自我认可），
+// 语义上正好就是要镜像那份的缓存值。
+func factoryPackage(path string) string {
+	factoryPkgMu.Lock()
+	defer factoryPkgMu.Unlock()
+	if v, ok := factoryPkgByPath[path]; ok {
+		return v
+	}
+	var pkg string
+	if info, err := ProbeApk(path); err == nil {
+		pkg = info.Package
+	}
+	factoryPkgByPath[path] = pkg
+	return pkg
 }
 
 // BaseVersionFromVersionName 从底包 versionName 反推「基底版本」。

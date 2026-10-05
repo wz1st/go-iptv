@@ -6,6 +6,7 @@ import (
 	"iptv-api/dao"
 	"iptv-api/dto"
 	"iptv-api/until"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -180,37 +181,14 @@ func SetTipSet(req dto.ClientTipSetReq) dto.ReturnJsonDto {
 
 // GetBuildStatus 返回编译进度，并把两张卡片要的数据一次给全。
 func GetBuildStatus() dto.ReturnJsonDto {
-	cfg := dao.GetConfig()
-	data := clientApkInfo(cfg)
-
 	if bootstrap.GetBuildStatus() == 1 {
-		return dto.ReturnJsonDto{Code: 0, Msg: "APK编译中...", Type: "info", Data: data}
+		return dto.ReturnJsonDto{Code: 0, Msg: "APK编译中...", Type: "info", Data: ClientApkInfo()}
 	}
-	return dto.ReturnJsonDto{Code: 1, Msg: "APK编译完成", Type: "success", Data: data}
+	return dto.ReturnJsonDto{Code: 1, Msg: "APK编译完成", Type: "success", Data: ClientApkInfo()}
 }
 
-// clientApkInfo 汇总「线上包」与「待发布包」两组信息，供取数与轮询共用。
-func clientApkInfo(cfg *dto.Config) map[string]interface{} {
-	official := bootstrap.OfficialAPKPath(cfg.Build.Name)
-	staged := bootstrap.StagedAPKPath(cfg.Build.Name)
-
-	return map[string]interface{}{
-		"status":     bootstrap.GetBuildStatus(),
-		"version":    cfg.Build.Version,
-		"size":       until.GetFileSize(official),
-		"md5":        until.Md5File(official),
-		"url":        "/app/" + cfg.Build.Name + ".apk",
-		"name":       bootstrap.APKDownloadName(cfg.Build.Name, cfg.Build.Version),
-		"newVersion": cfg.Build.NewVersion,
-		"newSize":    until.GetFileSize(staged),
-		"newMd5":     until.Md5File(staged),
-		"newExists":  until.Exists(staged),
-		// newName 必须发：前端的「新版本」下载链接用它当 :download，
-		// 轮询时也要靠它把名字刷回来（只发 newUrl 的话名字会一直停在初值）。
-		"newName": bootstrap.APKDownloadName(cfg.Build.Name, cfg.Build.NewVersion),
-		"newUrl":  "/app/" + cfg.Build.Name + "-new.apk",
-	}
-}
+// clientApkInfo 已并入 ClientApkInfo（adminClientBaseService.go）——
+// 基底信息、线上/待发布两组卡片都在那里汇总，保留两份必然只改一边。
 
 // PublishAPK 把「待发布」的包提升成线上版本。
 func PublishAPK() dto.ReturnJsonDto {
@@ -223,14 +201,21 @@ func PublishAPK() dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "没有待发布的版本，请先编译", Type: "danger"}
 	}
 
-	staged := bootstrap.StagedAPKPath(cfg.Build.Name)
+	staged := until.ClientApkPath(cfg.Build.Name, true)
 	if !until.Exists(staged) {
 		return dto.ReturnJsonDto{Code: 0, Msg: "待发布的安装包不存在，请重新编译", Type: "danger"}
 	}
 
-	official := bootstrap.OfficialAPKPath(cfg.Build.Name)
+	official := until.ClientApkPath(cfg.Build.Name, false)
 	if err := os.Rename(staged, official); err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "发布失败:" + err.Error(), Type: "danger"}
+	}
+
+	// 先把「这版用的是哪版基底」记下来，再推进版本号：顺序反了而中间失败，
+	// 就会出现「版本号说 1.0.0.001、记录还写 1.0.0」的自相矛盾状态。
+	pubBase := until.GetClientBaseVersion()
+	if err := until.SetClientPublishedBase(pubBase); err != nil {
+		log.Println("⚠️ 记录线上基底版本失败:", err)
 	}
 
 	published := cfg.Build.NewVersion
@@ -239,7 +224,7 @@ func PublishAPK() dto.ReturnJsonDto {
 	dao.SetConfig(cfg)
 
 	return dto.ReturnJsonDto{Code: 1, Msg: "发布成功", Type: "success", Data: map[string]interface{}{
-		"version": published,
+		"version": until.FormatClientVersion(pubBase, published),
 		"size":    until.GetFileSize(official),
 		"md5":     until.Md5File(official),
 	}}

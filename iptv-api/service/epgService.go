@@ -161,36 +161,42 @@ func getEpgCntv(name string) dto.ApkResponse {
 	}
 
 	if epgData, ok := jsonMap[name]; ok {
-		dataList := []dto.Program{}
-		pos := 0
-
-		if len(epgData["program"].([]interface{})) <= 0 {
+		// 断言失败会 panic。用逗号-ok 一次拿全，取不到就当空数组。
+		programs, _ := epgData["program"].([]interface{})
+		if len(programs) <= 0 {
 			res.Data = []dto.Program{}
 			return res
 		}
+
 		// 用统一的站点时区，而不是"先看容器是不是 UTC、是就手动 +8"。
-		now := time.Now().In(until.EPGLocation())
+		loc := until.EPGLocation()
+		now := time.Now().In(loc)
 		nowTime := now.Format("15:04")
-		var a = 0
-		for _, item := range epgData["program"].([]interface{}) {
-			if dataMap, ok := item.(map[string]interface{}); ok {
-				// 断言失败会直接 panic（CNTV 偶尔会漏字段），
-				// 用逗号-ok 形式降级成空值。
-				title, _ := dataMap["t"].(string)
-				showTime, _ := dataMap["showTime"].(string)
 
-				data := dto.Program{}
-				data.Name = title
-				data.StartTime = showTime
+		dataList := make([]dto.Program, 0, len(programs))
+		pos := 0
+		for _, item := range programs {
+			dataMap, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			title, _ := dataMap["t"].(string)
+			if title == "" {
+				continue
+			}
 
-				data.Pos = a
-				dataList = append(dataList, data)
+			data := dto.Program{}
+			data.Name = title
+			data.StartTime = cntvProgrammeTime(dataMap, loc)
+			if data.StartTime == "" {
+				continue
+			}
 
-				if nowTime > data.StartTime {
-					pos += 1
-				}
-				a++
+			data.Pos = len(dataList)
+			dataList = append(dataList, data)
 
+			if nowTime > data.StartTime {
+				pos++
 			}
 		}
 		if pos > 1 {
@@ -203,6 +209,22 @@ func getEpgCntv(name string) dto.ApkResponse {
 	}
 
 	return res
+}
+
+// cntvProgrammeTime 取一条 CNTV 节目的开播时刻 `HH:mm`。
+//
+// 优先用 `showTime`；拿不到就退回 `st`（Unix 秒）按站点时区格式化。
+// 退路是必需的：CNTV 的同一接口时好时坏，坏的时候整条 program 只有
+// `t`/`st`/`et`、没有 `showTime`，而这些响应会被写进当日缓存 ——
+// 一旦缓存住，客户端整天的节目单都是空的（表现为「暂无节目单」）。
+func cntvProgrammeTime(dataMap map[string]interface{}, loc *time.Location) string {
+	if showTime, _ := dataMap["showTime"].(string); showTime != "" {
+		return showTime
+	}
+	if st, ok := dataMap["st"].(float64); ok && st > 0 {
+		return time.Unix(int64(st), 0).In(loc).Format("15:04")
+	}
+	return ""
 }
 
 func getSimpleEpgCntv(name string) dto.SimpleResponse {
