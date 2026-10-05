@@ -80,7 +80,11 @@ func BuildClientApk(baseApk, outApk, workDir string, v ClientBuildValues) error 
 
 	// 解包基底：apktool 对已签名 APK 直接 d 会因"重复签名"失败，
 	// 所以必须先拿掉 META-INF 的签名文件（这不影响可安装性，重编时会重新签）。
-	if out, err := runTool("apktool", append([]string{"d", "-f", "-o", workDir, baseApk}, apktoolDecodeArgs()...)...); err != nil {
+	//
+	// 这里原来还追加了一个 apktoolDecodeArgs()，它返回孤立的 "-o"（没有跟值），
+	// 让命令行变成 `apktool d -f -o <workDir> <apk> -o`，apktool 直接打帮助 exit 1。
+	// 解包不需要额外参数，函数已删除。
+	if out, err := runTool("apktool", "d", "-f", "-o", workDir, baseApk); err != nil {
 		return fmt.Errorf("解包基底 APK 失败: %v\n%s", err, out)
 	}
 
@@ -106,13 +110,6 @@ func BuildClientApk(baseApk, outApk, workDir string, v ClientBuildValues) error 
 		return err
 	}
 	return nil
-}
-
-// apktoolDecodeArgs 是解包时的额外参数。
-// `-r` 不解资源会让我们改不到 strings.xml，所以不能要；
-// 这里显式写出来是为了让"为什么不加 -r"有个记录。
-func apktoolDecodeArgs() []string {
-	return []string{"-o"}
 }
 
 // validateClientValues 在动文件之前把不合法挡掉。
