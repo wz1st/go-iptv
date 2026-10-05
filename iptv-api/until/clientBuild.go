@@ -381,8 +381,22 @@ func signClientApk(apkPath, workDir string) error {
 	}
 
 	// 先对齐：apksigner 要求输入已 4 字节对齐，否则会拒绝或产出坏包。
-	if out, err := runTool(zipalignBin(), "-f", "-p", "4", apkPath); err != nil {
+	//
+	// **zipalign 的用法是 `zipalign [flags] <align> infile outfile` —— 必须给两个路径**，
+	// 原地覆盖同一个文件会直接打 usage 并 exit 2（容器里是 2009 年那版，
+	// 不支持 `-c` 之外的原地模式）。所以对齐到临时文件再换回来。
+	aligned := apkPath + ".aligned"
+	if out, err := runTool(zipalignBin(), "-f", "-p", "4", apkPath, aligned); err != nil {
+		os.Remove(aligned)
 		return fmt.Errorf("对齐失败(%s): %v\n%s", zipalignBin(), err, out)
+	}
+	// 换回原名：apksigner 与后续使用都按原路径找文件。
+	if err := os.Rename(aligned, apkPath); err != nil {
+		// 跨设备时 Rename 会失败（EXDEV），退回复制。
+		if out, cerr := runTool("cp", "-f", aligned, apkPath); cerr != nil {
+			return fmt.Errorf("对齐产物换回失败: %v / %v\n%s", err, cerr, out)
+		}
+		os.Remove(aligned)
 	}
 
 	// v1+v2+v3 全开：v1 兼容老设备，v2/v3 满足 targetSdk≥30 的强制要求。
