@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -85,7 +86,7 @@ func BuildAPK(staged bool) bool {
 	base := until.GetClientBaseVersion()
 	workDir := filepath.Join(os.TempDir(), fmt.Sprintf("client_build_%d", time.Now().UnixNano()))
 	values := until.ClientBuildValues{
-		ServerURL:   cfg.ServerUrl,
+		ServerURL:   clientApkHost(cfg.ServerUrl),
 		AppName:     cfg.Build.Name,
 		Version:     buildNo,
 		VersionName: until.FormatClientVersion(base, buildNo),
@@ -105,6 +106,27 @@ func BuildAPK(staged bool) bool {
 
 	log.Println("客户端APK编译完成:", apkPath)
 	return true
+}
+
+// clientApkHost 把配置里的站点基址归一成客户端要的那个地址。
+//
+// 两个字段语义不同，不能直接共用：
+//   - cfg.ServerUrl 是**站点根**（如 http://host:8090），服务端自己拼 "/apk/channels"；
+//   - 注入客户端的 qhtv_server_host 必须是**站点上的 apk 路径**（带 /apk 段），
+//     客户端在这后面直接接 /login、/getver。
+//
+// 之前是把 cfg.ServerUrl 原样传下去，于是只有"配置里手写了 /apk"时才编得过；
+// 而配置一旦带 /apk，服务端自己拼出来的 dataurl 就变成 /apk/apk/channels 直接 404。
+// 两头互斥 ⇒ 只能在这里归一：缺就补，已有就不重复加。
+func clientApkHost(serverURL string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasSuffix(trimmed, "/apk") {
+		return trimmed
+	}
+	return trimmed + "/apk"
 }
 
 // clientIconPath 返回上传的 logo；没上传返回空串（保留包内默认图）。
