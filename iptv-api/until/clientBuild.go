@@ -354,27 +354,72 @@ func (v ClientBuildValues) versionName() string {
 // 签名是必须的：不签的 APK 装不上（Android 要求每个 APK 都有 v1 签名）。
 // 用临时 keystore 而非打包进镜像的 keystore.p12：基底包与发行包用不同密钥，
 // 升级链才不会因为密钥不同而被系统判成"另一个应用"。
+// signClientApk 对齐并签名。
+//
+// 这里原来用 jarsigner —— 它只产 **v1（JAR）签名**。而本工程基包的
+// targetSdk 是 36，Android 7+ 对 targetSdk≥30 的应用**强制要求 v2/v3 签名**，
+// 于是产物装不上：
+//
+//	DOES NOT VERIFY
+//	ERROR: Target SDK version 36 requires a minimum of signature
+//	scheme v2; the APK is not signed with this or a later signature scheme
+//
+// 症状是「编译成功、产出 APK、装到设备上被拒」，且服务端日志里看不出任何异常。
+// 改用 SDK 里的 zipalign + apksigner（v1+v2+v3 一起出）。
 func signClientApk(apkPath, workDir string) error {
 	key := filepath.Join(workDir, "auto_keystore.jks")
 	const alias = "iptvkey"
+	const pass = "123456"
 
 	gen := exec.Command("keytool", "-genkey", "-v",
 		"-keystore", key, "-alias", alias,
 		"-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
-		"-storepass", "123456", "-keypass", "123456",
+		"-storepass", pass, "-keypass", pass,
 		"-dname", "CN=Auto, OU=Dev, O=Company, L=City, S=State, C=CN")
 	if out, err := gen.CombinedOutput(); err != nil {
 		return fmt.Errorf("生成签名失败: %v\n%s", err, out)
 	}
 
-	sign := exec.Command("jarsigner",
-		"-sigalg", "SHA256withRSA", "-digestalg", "SHA-256",
-		"-keystore", key, "-storepass", "123456", "-keypass", "123456",
-		apkPath, alias)
+	// 先对齐：apksigner 要求输入已 4 字节对齐，否则会拒绝或产出坏包。
+	if out, err := runTool(zipalignBin(), "-f", "-p", "4", apkPath); err != nil {
+		return fmt.Errorf("对齐失败(%s): %v\n%s", zipalignBin(), err, out)
+	}
+
+	// v1+v2+v3 全开：v1 兼容老设备，v2/v3 满足 targetSdk≥30 的强制要求。
+	sign := exec.Command(apksignerBin(), "sign",
+		"--ks", key, "--ks-key-alias", alias,
+		"--ks-pass", "pass:"+pass, "--key-pass", "pass:"+pass,
+		"--v1-signing-enabled", "true",
+		"--v2-signing-enabled", "true",
+		"--v3-signing-enabled", "true",
+		apkPath)
 	if out, err := sign.CombinedOutput(); err != nil {
-		return fmt.Errorf("签名失败: %v\n%s", err, out)
+		return fmt.Errorf("签名失败(%s): %v\n%s", apksignerBin(), err, out)
+	}
+
+	// 自证：产物必须真的带上 v2 以上签名，否则「编译成功」是假的。
+	// 只判 verify 的退出码不够 —— 低版本 apksigner 会对缺 v2 的包直接退 0。
+	if out, err := runTool(apksignerBin(), "verify", "--min-sdk-version", "30", apkPath); err != nil {
+		return fmt.Errorf(
+			"签名自检未通过：产物不满足 targetSdk≥30 要求的 v2 签名，装到设备上会被拒。\n%s", out)
 	}
 	return nil
+}
+
+// apksignerBin / zipalignBin 返回签名工具路径。
+// 允许用环境变量覆盖：不同镜像的 build-tools 版本与位置不一样。
+func apksignerBin() string {
+	if v := os.Getenv("IPTV_APKSIGNER"); v != "" {
+		return v
+	}
+	return "apksigner"
+}
+
+func zipalignBin() string {
+	if v := os.Getenv("IPTV_ZIPALIGN"); v != "" {
+		return v
+	}
+	return "zipalign"
 }
 
 // runTool 跑一个外部工具并把输出带回来。
