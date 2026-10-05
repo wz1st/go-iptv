@@ -3,13 +3,13 @@ package until
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"iptv-api/dao"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -82,48 +82,61 @@ func CheckEngineVer(latest string) (bool, error) {
 		}
 	}
 
-	if latest == oldVer {
-		return true, nil
+	need, err := parseVerTriple(latest)
+	if err != nil {
+		return false, errors.New("版本门配置错误: " + latest + " (" + err.Error() + ")")
 	}
-	vLen := 3
-	latest = strings.TrimPrefix(latest, "v")
-	oldVer = strings.TrimPrefix(oldVer, "v")
-	// "-custom.1" 这类后缀只用来区分分支，比较的是三段主版本号。
-	// 不截掉的话 "0-custom" 会被 Sscanf 读成 0，最后一个分支也不成立，
-	// 于是报出"版本号读取失败"这种指错方向的结论。
-	if i := strings.IndexByte(latest, '-'); i >= 0 {
-		latest = latest[:i]
-	}
-	if i := strings.IndexByte(oldVer, '-'); i >= 0 {
-		oldVer = oldVer[:i]
-	}
-	// 截掉后缀后可能就相等了，这里要再判一次，否则会落到函数末尾的兜底 error。
-	if latest == oldVer {
-		return true, nil
+	have, err := parseVerTriple(oldVer)
+	if err != nil {
+		return false, errors.New("引擎版本号无法识别: " + oldVer + " (" + err.Error() + ")，请检查引擎状态")
 	}
 
-	np := strings.Split(latest, ".")
-	op := strings.Split(oldVer, ".")
-	for len(np) < vLen {
-		np = append(np, "0")
-	}
-	for len(op) < vLen {
-		op = append(op, "0")
-	}
-
-	for i := 0; i < vLen; i++ {
-		var a, b int
-		fmt.Sscanf(np[i], "%d", &a)
-		fmt.Sscanf(op[i], "%d", &b)
-		if a > b {
+	for i := 0; i < len(need); i++ {
+		if need[i] > have[i] {
 			return false, errors.New("该功能需要引擎最低版本为: " + latest + " ,当前版本为: " + oldVer + " ,请升级引擎")
 		}
-		if a == b {
+		if need[i] == have[i] {
 			continue
 		}
-		if a < b {
-			return true, nil
-		}
+		//引擎更高即放行，后面的段不用再看。
+		return true, nil
 	}
-	return false, errors.New("版本号读取失败")
+	return true, nil
+}
+
+// parseVerTriple 把版本串归一成三段整数。
+//
+// 它替代了原先的 strings.Split + fmt.Sscanf：Sscanf 的错误被丢弃，
+// 遇到 "3.0"（只有两段）或 "3.0.0.beta"（第四段非数字）时 a 会静默变成 0，
+// 三段全部相等就掉到函数末尾，出一句"版本号读取失败"——
+// 既指错方向（实际是格式问题不是版本低），也看不出是哪个串坏了。
+func parseVerTriple(v string) ([3]int, error) {
+	var out [3]int
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(v, "V")
+	// "-custom.2" 只用来区分分支（引擎定制版是 v3.0.0-custom.N），比较的是主版本号。
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	if v == "" {
+		return out, errors.New("版本号为空")
+	}
+
+	parts := strings.Split(v, ".")
+	if len(parts) > len(out) {
+		return out, errors.New("版本号有 " + strconv.Itoa(len(parts)) + " 段，最多 3 段")
+	}
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return out, errors.New("第 " + strconv.Itoa(i+1) + " 段为空")
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return out, errors.New("第 " + strconv.Itoa(i+1) + " 段 " + strconv.Quote(p) + " 不是非负整数")
+		}
+		out[i] = n
+	}
+	return out, nil
 }
