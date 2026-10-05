@@ -27,7 +27,7 @@ func writeFakeEngine(t *testing.T, ver string) string {
 	return p
 }
 
-func TestProbeParseVerTriple(t *testing.T) {
+func TestParseVerTriple(t *testing.T) {
 	ok := []struct {
 		in   string
 		want [3]int
@@ -89,7 +89,7 @@ func TestProbeParseVerTriple(t *testing.T) {
 
 // TestProbeCheckEngineVer 走完整函数。假引擎通过 IPTV_ENGINE_BIN 注入版本号，
 // CheckEngineVer 拿不到 WS 时会回落到执行 `/app/engine -version`（同一条路径）。
-func TestProbeCheckEngineVer(t *testing.T) {
+func TestCheckEngineVer(t *testing.T) {
 	cases := []struct {
 		latest   string
 		engine   string
