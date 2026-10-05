@@ -136,29 +136,54 @@ func validateClientValues(v ClientBuildValues) error {
 
 // rewriteClientResources 改写 res/values/strings.xml 里的三个注入值。
 func rewriteClientResources(workDir string, v ClientBuildValues) error {
-	// apktool 解包后资源按 density 分桶，strings.xml 可能在 values/，
-	// 也可能在 values-XX/。哪个存在改哪个，全都不存在才报错 ——
-	// 直接写 values/ 会得到"编译过了但值没变"的静默失败。
-	found := false
+	// apktool 解包后资源按 density / language 分桶，本工程基包会产出 100+ 个
+	// values-*/ 目录（values-af、values-v26、values-zh-rCN …）。
+	// **绝大多数桶里只有 AndroidX 自带的 abc_* 翻译，不含本工程的三个键** ——
+	// 所以判据必须是"所有桶合起来覆盖了三个键"，而不是"每个桶都覆盖"。
+	//
+	// 曾经写成"遍历每个存在的桶，逐个要求三键齐全"，
+	// 结果 values-af/strings.xml（只有 abc_*）立刻让编译失败：
+	// 「改写 …/res/values-af/strings.xml 失败: 缺少资源键 app_name, …」。
+	// 而三键其实都在默认桶 values/ 里躺着。
+	want := map[string]string{
+		ResKeyServerHost: v.ServerURL,
+		ResKeyAppName:    v.AppName,
+		ResKeyVersion:    v.versionName(),
+	}
+	hit := map[string]bool{}
+	touched := 0
+
 	for _, dir := range resValueDirs(workDir) {
 		f := filepath.Join(dir, "strings.xml")
 		if !Exists(f) {
 			continue
 		}
-		found = true
-		if err := patchStringXml(f, map[string]string{
-			ResKeyServerHost: v.ServerURL,
-			ResKeyAppName:    v.AppName,
-			ResKeyVersion:    v.versionName(),
-		}); err != nil {
+		touched++
+		if err := patchStringXml(f, want, hit); err != nil {
 			return fmt.Errorf("改写 %s 失败: %v", f, err)
 		}
 	}
-	if !found {
+
+	if touched == 0 {
 		return fmt.Errorf(
 			"基底 APK 里找不到 strings.xml —— 这不是一个用本工程编译出来的基包，"+
 				"请上传含 %s / %s / %s 三个资源键的基底",
 			ResKeyServerHost, ResKeyAppName, ResKeyVersion)
+	}
+
+	// 只有**所有桶加起来**仍缺键才是真缺（说明确实不是本工程编出来的基包）。
+	var missing []string
+	for k := range want {
+		if !hit[k] {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		slices.Sort(missing)
+		return fmt.Errorf(
+			"基底的 %d 个 strings.xml 里都找不到资源键 %s"+
+				"（这个基包不是本工程编出来的）",
+			touched, strings.Join(missing, ", "))
 	}
 	return nil
 }
@@ -189,18 +214,20 @@ func resValueDirs(workDir string) []string {
 
 // patchStringXml 按**资源键名**替换字符串值。
 //
+// hit 是跨调用累积的命中集合：调用方要遍历上百个 values-* 桶，
+// 只有"所有桶加起来"仍缺键才算真缺，所以缺键判定不能在单个桶里做。
+//
 // 刻意不用字面量匹配旧值：字面量会随默认值调整而变（客户端把兜底地址从
 // 10.10.220.161 改成 .162 是很正常的改动），按值匹配会在那天突然"改不动"。
 var stringRe = regexp.MustCompile(`(?s)<string name="([^"]*)"[^>]*>(.*?)</string>`)
 
-func patchStringXml(path string, want map[string]string) error {
+func patchStringXml(path string, want map[string]string, hit map[string]bool) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	src := string(data)
 
-	hit := map[string]bool{}
 	out := stringRe.ReplaceAllStringFunc(src, func(m string) string {
 		sub := stringRe.FindStringSubmatch(m)
 		if len(sub) != 3 {
@@ -215,18 +242,6 @@ func patchStringXml(path string, want map[string]string) error {
 		open := m[:strings.Index(m, ">")+1]
 		return open + xmlEscape(v) + "</string>"
 	})
-
-	var missing []string
-	for k := range want {
-		if !hit[k] {
-			missing = append(missing, k)
-		}
-	}
-	if len(missing) > 0 {
-		slices.Sort(missing)
-		return fmt.Errorf("缺少资源键 %s（这个基包不是本工程编出来的）",
-			strings.Join(missing, ", "))
-	}
 
 	// 原子写：中途失败会留下半截 XML，apktool 后续报错很难指向真因。
 	return WriteFileAtomic(path, out, 0644)
