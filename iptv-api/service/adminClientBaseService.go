@@ -120,8 +120,16 @@ func installClientBase(tmp string) dto.ReturnJsonDto {
 	// 基底版本号以**上传者声明**的为准，但必须是三段数字（与 client-vX.Y.Z 同形）。
 	// 这里不校验 versionName 的形状：客户端的版本号由发布者在 CI 里定，
 	// 从 APK 的 versionName 反推反而容易和服务端记账打架。
-	base := until.GetClientBaseVersion()
+	//
+	// **必须归一，不能原样沿用旧值**：存量文件里已经躺过被污染的基底
+	// （线上见过 6 段的 `1.1.0.1.1.0`，正是早期把完整版本号当基底写进去的）。
+	// 原样沿用会让它**永久留在磁盘上** —— 换多少个新包都带着，而每个新版本号
+	// 都会再叠一层基底（1.1.0.1.1.0.001 → 8 段）。归一取前三段，
+	// 污染值当场被收拾成 1.1.0。
+	oldBase := until.GetClientBaseVersion()
+	base := until.BaseVersionFromRelease(oldBase)
 	if base == "" {
+		// 旧值是空**或已被污染到无法归一** ⇒ 以这份包的 versionName 为准。
 		base = until.BaseVersionFromRelease(info.VersionName)
 		if base == "" {
 			return dto.ReturnJsonDto{Code: 0, Type: "danger",
@@ -130,8 +138,7 @@ func installClientBase(tmp string) dto.ReturnJsonDto {
 		}
 	}
 
-	oldBase := base
-	baseChanged := base != until.GetClientBaseVersion()
+	baseChanged := base != oldBase
 
 	if err := os.MkdirAll(until.ClientUserDir, 0755); err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "创建目录失败:" + err.Error(), Type: "danger"}
