@@ -46,18 +46,22 @@ var (
 
 // ProbeApk 读出 APK 的包名与版本名。
 func ProbeApk(path string) (ApkInfo, error) {
-	var lastErr error
+	var errs []string
 	for _, bin := range aaptCandidates() {
 		info, err := probeWith(bin, path)
 		if err == nil {
 			return info, nil
 		}
-		lastErr = err
+		errs = append(errs, err.Error())
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("未找到可用的 aapt/aapt2")
+	if len(errs) == 0 {
+		return ApkInfo{}, fmt.Errorf("未找到可用的 aapt/aapt2")
 	}
-	return ApkInfo{}, lastErr
+	// 报**第一个**候选的失败原因，不是最后一个。
+	// 候选表末尾是裸 "aapt"（依赖 PATH，镜像里通常没有），
+	// 报它会把「包本身不是 zip」这类真因掩盖成
+	// "aapt: executable file not found in $PATH" —— 排查时被带偏很久。
+	return ApkInfo{}, fmt.Errorf("%s", errs[0])
 }
 
 func probeWith(bin, path string) (ApkInfo, error) {
