@@ -86,8 +86,13 @@ func SiteIndexData(c *gin.Context) {
 		pageData.ShowDownMyTV = true
 		// 文件名带真实版本「底包版本.编译号」—— 改造前硬编码 "1.2.0."，
 		// 底包升到 1.2.2 后下载文件名与包内版本就对不上了。
+		//
+		// 基底必须取 **MytvPublishedBase**（线上包编译时用的那版），不是
+		// GetMytvVersion（当前底包）。用户换过底包但还没重新编译时两者不同，
+		// 用当前的会让文件名显示新基底 + 旧编译号，与包里实际版本号对不上。
+		// MyTVReleases（客户端自升级检查）用的就是 MytvPublishedBase，两处必须一致。
 		pageData.MyTVName = cfg.Site.MytvNameOr() + "-" +
-			until.FormatMytvVersion(until.GetMytvVersion(), cfg.MyTV.Version) + ".apk"
+			until.FormatMytvVersion(until.MytvPublishedBase(), cfg.MyTV.Version) + ".apk"
 		pageData.MyTVUrl = "/app/" + cfg.Site.MytvNameOr() + "-mytv.apk"
 	}
 
