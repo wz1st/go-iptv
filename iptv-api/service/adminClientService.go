@@ -234,16 +234,22 @@ func clientApkInfo(cfg *dto.Config) map[string]interface{} {
 	staged := bootstrap.StagedAPKPath(cfg.Build.Name)
 
 	return map[string]interface{}{
-		"status":     bootstrap.GetBuildStatus(),
-		"version":    cfg.Build.Version,
-		"size":       until.GetFileSize(official),
-		"md5":        until.Md5File(official),
-		"url":        "/app/" + cfg.Build.Name + ".apk",
-		"name":       bootstrap.APKDownloadName(cfg.Build.Name, cfg.Build.Version),
-		"newVersion": cfg.Build.NewVersion,
-		"newSize":    until.GetFileSize(staged),
-		"newMd5":     until.Md5File(staged),
-		"newExists":  until.Exists(staged),
+		"status": bootstrap.GetBuildStatus(),
+		// ---- 编译基底（底包）----
+		// 前端基底卡片要显示这两个值，而 client/data 那条路径不带它们，
+		// 所以面板首屏单独取一次 buildStatus —— 这里必须发，否则徽章恒为「-」。
+		// （重构前这些字段在 service.ClientApkInfo 里，那函数现在已无人调用。）
+		"baseVersion": until.GetClientBaseVersion(),
+		"basePkg":     until.ClientFactoryPackage(),
+		"version":     cfg.Build.Version,
+		"size":        until.GetFileSize(official),
+		"md5":         until.Md5File(official),
+		"url":         "/app/" + cfg.Build.Name + ".apk",
+		"name":        bootstrap.APKDownloadName(cfg.Build.Name, cfg.Build.Version),
+		"newVersion":  cfg.Build.NewVersion,
+		"newSize":     until.GetFileSize(staged),
+		"newMd5":      until.Md5File(staged),
+		"newExists":   until.Exists(staged),
 		// newName 必须发：前端的「新版本」下载链接用它当 :download，
 		// 轮询时也要靠它把名字刷回来（只发 newUrl 的话名字会一直停在初值）。
 		"newName": bootstrap.APKDownloadName(cfg.Build.Name, cfg.Build.NewVersion),
