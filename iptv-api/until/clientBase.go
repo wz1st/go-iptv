@@ -56,23 +56,22 @@ func GetClientBaseVersion() string {
 }
 
 // FormatClientVersion 拼客户端对外版本号：基底版本 + "." + 三位编译号。
-// 与 mytv 的 FormatMytvVersion 同一形状，但**各自独立** —— 两条版本序列
-// 互不干涉（基底换版不需要重新编译客户端，反之亦然）。
+// 与 mytv 的 FormatMytvVersion 同一形状，但**基底与序列各自独立** ——
+// 两条版本序列互不干涉（换基底不需要重新编译客户端，反之亦然）。
 //
 // buildNo 必须是**纯编译号**（001）。这里对"传进来的是完整版本号"做归一，
 // 因为线上曾出现过 8 段的 `1.0.0.1.0.0.001`：前端把完整串当编译号传进来，
 // 这里再拼一次基底就多叠一层，**每点一次编译多叠一层**，且不报错。
-// 归一后取末段数字（001），存量脏数据不会被继续放大。
+// 归一逻辑与 mytv 共用 PadBuildNo（同一入口），避免两条链路各修一次。
 func FormatClientVersion(base, buildNo string) string {
 	if base == "" || strings.TrimSpace(buildNo) == "" {
 		return ""
 	}
-	no := strings.TrimSpace(buildNo)
-	// 只取结尾那一段数字：兼容误传完整版本号（1.0.0.001 → 001）。
-	if idx := strings.LastIndex(no, "."); idx >= 0 {
-		no = no[idx+1:]
+	no := PadBuildNo(buildNo)
+	if no == "" {
+		return ""
 	}
-	return base + "." + PadBuildNo(no)
+	return base + "." + no
 }
 
 // ClientPublishedBase 返回线上包所用的基底版本；没有记录时回落当前基底。

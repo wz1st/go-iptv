@@ -615,23 +615,55 @@ func MytvBaseDir() string {
 func GetMytvVersion() string { return ReadFile(MytvBaseDir() + "/Version_mytv") }
 
 // PadBuildNo 把 mytv 的编译号补成三位（1 → 001、11 → 011、111 → 111）。
+//
+// 只认**结尾那一段纯数字**，其余一律归一到那一段：
+//   - 完整版本号（1.0.0.001 → 001）—— 前端曾把它当编译号发过来，
+//     拼版本号时再多叠一层，且全程不报错。
+//   - 带小数的脏数据（1.0 → 0）—— 旧数据里真实出现过，编译号只可能
+//     是 1-999 的整数，"1.0" 不是一个合法的编译号，取末段是最保守的收拾。
+//
+// 原来是纯 `len(s) >= 3 就原样返回`，于是 "1.0"（长度正好 3）被当成合法编译号，
+// 与基底拼出 5 段的 `1.0.0.1.0`。
 func PadBuildNo(v string) string {
+	no := lastNumericSegment(v)
+	if no == "" {
+		return ""
+	}
+	if len(no) >= 3 {
+		return no
+	}
+	return strings.Repeat("0", 3-len(no)) + no
+}
+
+// lastNumericSegment 取串里结尾那一段连续数字（"1.0.0.001" → "001"、"12" → "12"、
+// "abc" → ""）。编译号与版本号的拼接都靠它归一，是防叠加的单一入口。
+func lastNumericSegment(v string) string {
 	s := strings.TrimSpace(v)
 	if s == "" {
 		return ""
 	}
-	if len(s) >= 3 {
-		return s
+	// 先砍掉最后一段点号之后的内容，再在剩下的尾部找数字。
+	if i := strings.LastIndex(s, "."); i >= 0 {
+		s = s[i+1:]
 	}
-	return strings.Repeat("0", 3-len(s)) + s
+	j := len(s)
+	for j > 0 && s[j-1] >= '0' && s[j-1] <= '9' {
+		j--
+	}
+	return s[j:]
 }
 
 // FormatMytvVersion 拼 mytv 的对外版本号：基底版本 + "." + 三位编译号。
+// 归一在 PadBuildNo 里，所以误传完整版本号只会得到 4 段结果，不会越叠越长。
 func FormatMytvVersion(base, buildNo string) string {
 	if base == "" || strings.TrimSpace(buildNo) == "" {
 		return ""
 	}
-	return base + "." + PadBuildNo(buildNo)
+	no := PadBuildNo(buildNo)
+	if no == "" {
+		return ""
+	}
+	return base + "." + no
 }
 
 func EqualStringSets(a, b []string) bool {
