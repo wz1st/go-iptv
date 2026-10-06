@@ -51,8 +51,19 @@ func ClientBaseDir() string {
 }
 
 // GetClientBaseVersion 读基底版本号（用户上传目录优先，回落镜像）。
+//
+// 读出来就**归一成三段**（走 BaseVersionFromRelease），不原样返回。
+// 这不是洁癖：磁盘上已经躺过被污染的基底 —— 线上出现过 6 段的
+// `1.1.0.1.1.0`，成因是早期把完整版本号当基底写进了 Version_client。
+// 原样返回会让它一路拼进每个对外版本号（1.1.0.1.1.0.001），且**每点一次
+// 编译再多叠一层**，界面上看着像随机出错。
+//
+// 归一后污染值当场退成 1.1.0，与镜像里出厂那份（CI 有「标签与 Version_client
+// 逐字比对」门禁，写的一定是三段）重新对齐。
+// 归一不了时返回空串 —— 调用方会退回到"从 APK 的 versionName 反推"那条路，
+// 而那也返回空时就是真出问题了，宁可空着也不要返回一个会被继续叠的脏串。
 func GetClientBaseVersion() string {
-	return strings.TrimSpace(ReadFile(ClientBaseDir() + "/" + clientVersionAsset))
+	return BaseVersionFromRelease(ReadFile(ClientBaseDir() + "/" + clientVersionAsset))
 }
 
 // FormatClientVersion 拼客户端对外版本号：基底版本 + "." + 三位编译号。
