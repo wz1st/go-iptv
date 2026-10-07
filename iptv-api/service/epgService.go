@@ -169,28 +169,37 @@ func getEpgCntv(name string) dto.ApkResponse {
 			return res
 		}
 		// 用统一的站点时区，而不是"先看容器是不是 UTC、是就手动 +8"。
-		now := time.Now().In(until.EPGLocation())
+		loc := until.EPGLocation()
+		now := time.Now().In(loc)
 		nowTime := now.Format("15:04")
-		var a = 0
 		for _, item := range epgData["program"].([]interface{}) {
-			if dataMap, ok := item.(map[string]interface{}); ok {
-				// 断言失败会直接 panic（CNTV 偶尔会漏字段），
-				// 用逗号-ok 形式降级成空值。
-				title, _ := dataMap["t"].(string)
-				showTime, _ := dataMap["showTime"].(string)
+			dataMap, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			// 断言失败会直接 panic（CNTV 偶尔会漏字段），用逗号-ok 降级成空值。
+			title, _ := dataMap["t"].(string)
+			if title == "" {
+				continue
+			}
 
-				data := dto.Program{}
-				data.Name = title
-				data.StartTime = showTime
+			start := cntvProgrammeTime(dataMap, loc)
+			// 取不到开播时刻的条目必须丢掉，不能带着空 starttime 发出去：
+			// 客户端解析节目单时会整条丢弃解析失败的项，
+			// 于是表现为「接口返回 33 条、客户端一条都显示不出来」。
+			if start == "" {
+				continue
+			}
 
-				data.Pos = a
-				dataList = append(dataList, data)
+			data := dto.Program{}
+			data.Name = title
+			data.StartTime = start
 
-				if nowTime > data.StartTime {
-					pos += 1
-				}
-				a++
+			data.Pos = len(dataList)
+			dataList = append(dataList, data)
 
+			if nowTime > data.StartTime {
+				pos++
 			}
 		}
 		if pos > 1 {
@@ -203,6 +212,22 @@ func getEpgCntv(name string) dto.ApkResponse {
 	}
 
 	return res
+}
+
+// cntvProgrammeTime 取一条 CNTV 节目的开播时刻 `HH:mm`。
+//
+// 优先用 `showTime`；拿不到就退回 `st`（Unix 秒）按站点时区格式化。
+// 退路是必需的：CNTV 的同一接口时好时坏，坏的时候整条 program 只有
+// `t`/`st`/`et`、没有 `showTime`，而这些响应会被写进当日缓存 ——
+// 一旦缓存住，客户端整天的节目单都是空的（表现为「暂无节目单」）。
+func cntvProgrammeTime(dataMap map[string]interface{}, loc *time.Location) string {
+	if showTime, _ := dataMap["showTime"].(string); showTime != "" {
+		return showTime
+	}
+	if st, ok := dataMap["st"].(float64); ok && st > 0 {
+		return time.Unix(int64(st), 0).In(loc).Format("15:04")
+	}
+	return ""
 }
 
 func getSimpleEpgCntv(name string) dto.SimpleResponse {
@@ -258,12 +283,64 @@ func getSimpleEpgCntv(name string) dto.SimpleResponse {
 			// 取的是容器本地时区 —— 容器跑在 UTC 时这一栏会差 8 小时。
 			data.StartTime = time.Unix(int64(liveSt), 0).In(until.EPGLocation()).Format("15:04")
 		}
+		// CNTV 的 isLive/liveSt 时好时坏，缺了就退回 program 里"此刻正在播"的那条。
+		// 这两个字段一旦缺失，客户端拿到的是空节目名 —— 而当前节目是遮罩栏
+		// 每一行副标题与信息栏的主数据，缺了等于整屏「暂无节目信息」。
+		if data.Name == "" || data.StartTime == "" {
+			if p, ok := currentCntvProgramme(epgData, until.EPGLocation()); ok {
+				if data.Name == "" {
+					data.Name = p.Name
+				}
+				if data.StartTime == "" {
+					data.StartTime = p.StartTime
+				}
+			}
+		}
 		// 注意：原来这里又声明了一个同名的 simpleRes，把外层那个遮掉了
 		simpleRes.Data = data
 		return simpleRes
 	}
 	simpleRes.Data = dto.Program{}
 	return simpleRes
+}
+
+// currentCntvProgramme 从 CNTV 的 program 数组里找"此刻正在播"的一条。
+//
+// 判定：开播时刻已过，且（有结束时刻时）尚未结束。同一时刻命中多条时取开播最晚的，
+// 与 getSimpleEpg 的选法一致 —— 重播/连播时段里前一条可能已结束，取错会让界面停在上一集。
+func currentCntvProgramme(epgData map[string]interface{}, loc *time.Location) (dto.Program, bool) {
+	items, _ := epgData["program"].([]interface{})
+	now := time.Now().In(loc)
+
+	var best dto.Program
+	var bestAt time.Time
+	found := false
+
+	for _, item := range items {
+		dataMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		title, _ := dataMap["t"].(string)
+		if title == "" {
+			continue
+		}
+		st, isNum := dataMap["st"].(float64)
+		if !isNum || st <= 0 {
+			continue
+		}
+		tS := time.Unix(int64(st), 0).In(loc)
+		if now.Before(tS) {
+			continue // 还没开播
+		}
+		if et, isNum := dataMap["et"].(float64); isNum && et > 0 && !now.Before(time.Unix(int64(et), 0).In(loc)) {
+			continue // 已经播完
+		}
+		if !found || tS.After(bestAt) {
+			best, bestAt, found = dto.Program{Name: title, StartTime: tS.Format("15:04")}, tS, true
+		}
+	}
+	return best, found
 }
 
 func getEpgXml(epgFromId int64, epgName string) dto.ApkResponse {
