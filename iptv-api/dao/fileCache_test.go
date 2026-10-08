@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // 文件缓存的三个"静默失效"点
@@ -160,5 +161,52 @@ func TestCacheDeleteByPattern(t *testing.T) {
 	}
 	if !c.Exists("cntv_cctv1") {
 		t.Fatal("不匹配的键不该被删掉")
+	}
+}
+
+// TestFreshRejectsStaleEntry Fresh 必须按 TTL 拒绝陈旧条目。
+//
+// 这条判据对应真实故障：CNTV 同一份响应里 program 数组当天不变，
+// 而 isLive/liveSt 每分钟都在变。原来按天缓存，simple 接口整天返回
+// 早上的那条（实测 09:15 仍回 06:00 朝闻天下）。
+func TestFreshRejectsStaleEntry(t *testing.T) {
+	c := newTestCache(t)
+	key := "cntv_cctv1"
+	if err := c.Set(key, []byte(`{"isLive":"朝闻天下"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	// 刚写入：TTL 内必须放行，否则缓存等于没用。
+	if !c.Fresh(key, time.Minute) {
+		t.Fatal("刚写入的条目在 TTL 内应判定为新鲜")
+	}
+
+	// TTL 设为 0：任何条目都算过期。这条是"过期必拒"的正面用例，
+	// 少写 time.Since 比较就会让它永远为真。
+	if c.Fresh(key, 0) {
+		t.Fatal("TTL=0 时任何条目都不该算新鲜")
+	}
+
+	// 负 TTL 同样必须拒，不能因为比较式反向而放行。
+	if c.Fresh(key, -time.Minute) {
+		t.Fatal("负 TTL 不该放行")
+	}
+
+	// 不存在的键永远不新鲜。
+	if c.Fresh("cntv_never_written", time.Hour) {
+		t.Fatal("不存在的键不该算新鲜")
+	}
+}
+
+// TestFreshIgnoresExpireAtZeroWhenDisabled newTestCache 关闭了按天过期，
+// 本条钉住 Fresh 与 Exists 在"未过期"时的一致性，避免两条判据分叉。
+func TestFreshMatchesExistsWithinTTL(t *testing.T) {
+	c := newTestCache(t)
+	key := "cntv_cctv13"
+	if err := c.Set(key, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if c.Exists(key) != c.Fresh(key, time.Hour) {
+		t.Fatalf("Exists=%v 与 Fresh(1h)=%v 应一致", c.Exists(key), c.Fresh(key, time.Hour))
 	}
 }
