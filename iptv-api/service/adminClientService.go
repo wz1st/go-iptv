@@ -6,6 +6,7 @@ import (
 	"iptv-api/dao"
 	"iptv-api/dto"
 	"iptv-api/until"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -278,13 +279,24 @@ func PublishAPK() dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "发布失败:" + err.Error(), Type: "danger"}
 	}
 
+	// 先把「这版用的是哪版基底」记下来，再推进版本号：顺序反了而中间失败，
+	// 就会出现「版本号说 1.0.0.001、记录还写 1.0.0」的自相矛盾状态。
+	//
+	// 缺这段的后果：PubBase 永远不存在 ⇒ ClientPublishedBase() 恒等于
+	// GetClientBaseVersion() ⇒ 换过基底但还没重编时，**线上包**的版本号会
+	// 提前跳到新基底，与包里实际（旧基底编的）对不上。
+	pubBase := until.GetClientBaseVersion()
+	if err := until.SetClientPublishedBase(pubBase); err != nil {
+		log.Println("⚠️ 记录线上基底版本失败:", err)
+	}
+
 	published := cfg.Build.NewVersion
 	cfg.Build.Version = published
 	cfg.Build.NewVersion = ""
 	dao.SetConfig(cfg)
 
 	return dto.ReturnJsonDto{Code: 1, Msg: "发布成功", Type: "success", Data: map[string]interface{}{
-		"version": published,
+		"version": until.FormatClientVersion(pubBase, published),
 		"size":    until.GetFileSize(official),
 		"md5":     until.Md5File(official),
 	}}
