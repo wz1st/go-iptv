@@ -201,3 +201,50 @@ func TestPanelAndGetverShareSameVersionSource(t *testing.T) {
 		t.Fatal("/getver 侧口径与面板不一致，同一个包会显示两个版本号")
 	}
 }
+
+// —— 第三层：SetAppInfo / SetMyTVAppInfo 的「版本号不能相同」比对口径 ——
+
+// 功能层：换基底后编译号归零，新基底首版（1.2.0.001）必须与旧基底首版（1.1.1.001）
+// 判为不同版本；但真正同完整版本号（同基底同编译号）仍应判相同。
+func TestVersionSameCheckIgnoresBuildNoAfterBaseChange(t *testing.T) {
+	// 线上包：旧基底 1.1.1 的 001 版；换基底后磁盘新基底 1.2.0 首版编译号也是 001。
+	curFull := until.FormatClientVersion("1.1.1", "001")
+	newFull := until.FormatClientVersion("1.2.0", "001")
+	if curFull == newFull {
+		t.Fatalf("换基底后首版被误判相同：%s == %s，后台会报『版本号不能相同』挡住首版编译", curFull, newFull)
+	}
+	// 反向：确实同完整版本号（同基底同编译号）必须判相同，不能被放行。
+	if again := until.FormatClientVersion("1.1.1", "001"); curFull != again {
+		t.Fatalf("同一完整版本号应判相同：%s vs %s", curFull, again)
+	}
+}
+
+// 源码契约：SetAppInfo 的「版本号不能相同」必须按完整版本号（基底.编译号）比对，
+// 不能比裸编译号 —— 否则换基底后编译号归零会与旧基底撞号，挡住新基底首版编译。
+func TestSetAppInfoComparesFullVersion(t *testing.T) {
+	src := srcOf(t, "adminClientService.go")
+	if !strings.Contains(src, "until.FormatClientVersion(until.ClientPublishedBase(), cfg.Build.Version)") {
+		t.Fatal("SetAppInfo 未按「ClientPublishedBase + 已发布编译号」拼出完整版本号做比对")
+	}
+	if !strings.Contains(src, "until.FormatClientVersion(until.GetClientBaseVersion(), appVersion)") {
+		t.Fatal("SetAppInfo 未按「当前基底 + 待编译号」拼出完整版本号做比对")
+	}
+	// 旧写法必须消失：比裸编译号会在换基底后误拒首版。
+	if strings.Contains(src, "cfg.Build.Version == appVersion") {
+		t.Fatal("SetAppInfo 仍在比裸编译号（cfg.Build.Version == appVersion）—— 换基底后首版会被误拒")
+	}
+}
+
+// 源码契约：SetMyTVAppInfo 同款修复，比对完整版本号而非裸编译号。
+func TestSetMyTVAppInfoComparesFullVersion(t *testing.T) {
+	src := srcOf(t, "adminClientMyTVService.go")
+	if !strings.Contains(src, "until.FormatMytvVersion(until.MytvPublishedBase(), cfg.MyTV.Version)") {
+		t.Fatal("SetMyTVAppInfo 未按「MytvPublishedBase + 已发布编译号」拼出完整版本号做比对")
+	}
+	if !strings.Contains(src, "until.FormatMytvVersion(until.GetMytvVersion(), appVersion)") {
+		t.Fatal("SetMyTVAppInfo 未按「当前基底 + 待编译号」拼出完整版本号做比对")
+	}
+	if strings.Contains(src, "cfg.MyTV.Version == appVersion") {
+		t.Fatal("SetMyTVAppInfo 仍在比裸编译号（cfg.MyTV.Version == appVersion）—— 换基底后首版会被误拒")
+	}
+}
