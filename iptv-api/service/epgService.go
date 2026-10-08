@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+// cntvLiveTTL 是 simple 接口读 CNTV 缓存时允许的最大「陈旧」时长。
+//
+// 取 2 分钟是权衡：节目单最小粒度就是分钟级，再长则切台后要等一两分钟
+// 才看到新节目；再短则每次开遮罩栏都要打一批 CNTV 请求。
+const cntvLiveTTL = 2 * time.Minute
+
 func GetWeather() map[string]interface{} {
 	res := make(map[string]interface{})
 	res["code"] = 200
@@ -248,7 +254,16 @@ func getSimpleEpgCntv(name string) dto.SimpleResponse {
 	var jsonMap map[string]map[string]interface{}
 	readCacheOk := false
 
-	if dao.Cache.Exists(cacheKey) {
+	// 这里必须用 Fresh（带 TTL）而不是 Exists（只判跨天）。
+	//
+	// CNTV 同一份响应里混了两种性质完全不同的数据：
+	// - program 数组是「当天节目表」，整天不变，按天缓存正确；
+	// - isLive / liveSt 是「此刻正在播」，每分钟都在变。
+	//
+	// 按天缓存会把 isLive 一起冻住，于是 simple 接口一整天都在返回
+	// 缓存那一刻的旧节目（实测 09:15 仍回 06:00 朝闻天下），
+	// 表现为客户端第二栏「在播节目时间与当前时间对不上」。
+	if dao.Cache.Fresh(cacheKey, cntvLiveTTL) {
 		// 同 getEpgCntv：必须取址，否则缓存永远不命中。
 		if err := dao.Cache.GetJSON(cacheKey, &jsonMap); err == nil {
 			readCacheOk = true
