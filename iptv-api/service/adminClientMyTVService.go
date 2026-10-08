@@ -119,7 +119,10 @@ func SetMyTVAppInfo(req dto.MyTVBuildReq) dto.ReturnJsonDto {
 
 	// 待发布号只与**已发布**版本比：与线上相同等于白编一版；
 	// 与未发布的 NewVersion 相同则是合法的「重新编译」，直接覆盖。
-	if cfg.MyTV.Version == appVersion {
+	// 换基底后编译号归零，裸编译号会与旧基底撞号，必须按「基底.编译号」完整串比对。
+	curFull := until.FormatMytvVersion(until.MytvPublishedBase(), cfg.MyTV.Version)
+	newFull := until.FormatMytvVersion(until.GetMytvVersion(), appVersion)
+	if curFull != "" && curFull == newFull {
 		return dto.ReturnJsonDto{Code: 0, Msg: "版本号不能相同", Type: "danger"}
 	}
 

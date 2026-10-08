@@ -145,7 +145,11 @@ func SetAppInfo(req dto.ClientAppInfoReq) dto.ReturnJsonDto {
 	}
 
 	cfg := dao.GetConfig()
-	if cfg.Build.Version == appVersion {
+	// 换基底后编译号归零，裸编译号会与旧基底撞号（1.1.1.001 与 1.2.0.001 的编译号都是 001），
+	// 必须按「基底.编译号」完整串比对，否则后台会误报「版本号不能相同」挡住新基底首版编译。
+	curFull := until.FormatClientVersion(until.ClientPublishedBase(), cfg.Build.Version)
+	newFull := until.FormatClientVersion(until.GetClientBaseVersion(), appVersion)
+	if curFull != "" && curFull == newFull {
 		return dto.ReturnJsonDto{Code: 0, Msg: "版本号不能相同", Type: "danger"}
 	}
 
