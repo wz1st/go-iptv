@@ -36,12 +36,31 @@ func NewFileCache(dir string, expireAtZero bool) (*FileCache, error) {
 	}, nil
 }
 
+// epgLoc 是 EPG 缓存判"当天"用的时区，固定东八区。
+//
+// 为什么不能用服务器本地时区：容器跑 UTC，`time.Now()` 的 Location 是 UTC，
+// 于是"今天 0 点"算成**北京 08:00**。后果是双向错的：
+//   - 北京 00:00~08:00（正是用户问"现在在播什么"的时段）会被判成"昨天"，
+//     缓存反复失效、且当天早上拉到的数据写不进缓存；
+//   - 北京 16:00 之后写下的缓存会被当成"今天"一直用到第二天早上。
+//
+// 实测症状：北京 13:34 查CCTV1，simple 接口仍回 `06:00朝闻天下`。
+//
+// EPG 的"当天"本来就是节目单的语义（节目表按电视台所在地时间编排），
+// 与服务器跑在哪个时区无关，所以固定东八区而不是改容器 TZ。
+var epgLoc = time.FixedZone("CST", 8*3600)
+
 // 判断是否今天 0 点之后
 func expiredAtMidnight(modTime time.Time) bool {
-	now := time.Now()
-	// 今天 0 点
-	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	return modTime.Before(midnight)
+	return expiredAtMidnightSince(modTime, time.Now())
+}
+
+// expiredAtMidnightSince 是可注入"现在"的纯判定，测试用它固定时刻。
+// 拆出来是因为直接调 time.Now() 的函数没法写稳定的时区回归测试。
+func expiredAtMidnightSince(modTime, now time.Time) bool {
+	n := now.In(epgLoc)
+	midnight := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, epgLoc)
+	return modTime.In(epgLoc).Before(midnight)
 }
 
 // 保存缓存（字节）
