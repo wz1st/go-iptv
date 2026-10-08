@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
+	"iptv-api/bootstrap"
 	"iptv-api/dao"
 	"iptv-api/dto"
 	"iptv-api/models"
@@ -23,11 +24,26 @@ func Getver() dto.GetverRes {
 
 	var cfg = dao.GetConfig()
 
-	res.AppVer = cfg.Build.Version
+	// **必须下发完整四段**（基底.编译号），不能只给编译号。
+	//
+	// APK 侧 UpdateRepository.check 拿本机 versionName（完整四段，如 1.1.0.005）
+	// 与这个字段做**字符串比较**（旧实现如此，重建仓沿用了同一口径）。
+	// 只下发纯编译号时，"1.1.0.005" < "5" 恒成立 ⇒ 永远判为"有新版本"，
+	// 用户每次进关于页都被推一次下载同一个包（实测现象）。
+	//
+	// 基底取 **ClientPublishedBase**（线上包编译时用的那版）而不是当前基底：
+	// 换过基底但还没重新编译发布时两者不同，用当前的会让客户端看到
+	// 「新基底 + 旧编译号」这样一个并不存在的版本。口径与面板
+	// （ClientApkInfo 的 curVersion）必须逐字一致，否则同一个包两处显示不同版本。
+	res.AppVer = until.FormatClientVersion(until.ClientPublishedBase(), cfg.Build.Version)
 	res.UpSets = cfg.App.Update.Set
 	res.UpText = until.FixedUpdateText
 	res.AppURL = cfg.ServerUrl + "/app/" + cfg.Build.Name + ".apk"
-	res.UpSize = until.GetFileSize("./app/" + cfg.Build.Name + ".apk")
+	// 路径必须是**线上包的真实落点** `/config/app/...`。
+	// 原来写的是相对路径 `./app/...`，运行目录是 `/app` 而包在持久卷 `/config/app/`，
+	// os.Stat 必然失败 ⇒ GetFileSize 恒返回 "0 MB"，客户端更新弹窗里的包大小一直是 0。
+	// 这正是 SiteIndexData 用来判断"APK 是否存在"的同一个判据（!= "0 MB"）。
+	res.UpSize = until.GetFileSize(bootstrap.OfficialAPKPath(cfg.Build.Name))
 	return res
 }
 
