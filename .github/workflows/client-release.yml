@@ -86,7 +86,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.check.outputs.tag }}
-          name: 客户端基底 ${{ steps.check.outputs.version }}
+          name: client v${{ steps.check.outputs.version }}
           prerelease: false
           overwrite_files: true
           files: |
