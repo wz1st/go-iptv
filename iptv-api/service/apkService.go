@@ -77,7 +77,10 @@ func ApkLogin(user models.IptvUser) dto.LoginRes {
 	result.NetType = user.NetType
 	result.Location = user.Region
 
-	// showinterval / autoupdate / updateinterval 三个字段仍留在 LoginRes 里
+	// 未下发的字段已在 dto.LoginRes 里删除（见该类型注释）：
+	// showinterval / autoupdate / updateinterval / setver / exp / arrsrc /
+	// arrproxy / exps / stus / movieengine —— 旧注释说它们"仍留在 LoginRes 里"，
+	// 现在不成立了，注释一并更新。
 	result.AdText = cfg.Ad.AdText
 	result.Decoder = cfg.App.Decoder
 	result.AppVer = cfg.Build.Version
@@ -252,9 +255,9 @@ func CompressString(input string) (string, error) {
 func getUserInfo(user models.IptvUser, result dto.LoginRes) dto.LoginRes {
 	var cfg = dao.GetConfig()
 
-	// 点播管理已下线：不再查 iptv_movie，恒下发空数组。
-	// 字段本身必须保留，客户端按 movieengine.model 取值（见 dto.MovieEngine 注释）。
-	result.MovieEngine.Model = []struct{}{}
+	// 「点播管理」已整体下线：原 `movieengine.model` 恒下发空数组的占位也一并删除 ——
+	// 服务端不再需要这个字段（dto 里已移除），客户端全仓也搜不到 `movieengine`
+	// 的任何读取（0 引用）。留着一个永远为空的字段只会误导下一位读者。
 
 	if cfg.App.NeedAuthor == 0 {
 		result = getMealName(user, result)

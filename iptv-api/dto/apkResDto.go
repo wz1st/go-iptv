@@ -1,37 +1,37 @@
 package dto
 
+// LoginRes 是 `/apk/login` 的响应体。
+//
+// **只保留服务端真正会下发的字段。** 早先这里挂着十来个从未被 `service.ApkLogin`
+// 赋值过的字段（`setver` / `showinterval` / `exp` / `arrsrc` / `arrproxy` /
+// `autoupdate` / `updateinterval` / `exps` / `stus` / `movieengine`）：
+// 它们有的客户端还在按默认值读（删掉后 Kotlin 侧走默认值，行为不变），
+// 有的两侧都已是死代码。一并删除，避免"字段在协议里、其实永远是零值"的误导。
+//
+// 注意：客户端 `ServerConfig` 里另有 `dataver` / `categoryCount` / `canseeklist` /
+// `regionlimit` 等字段，服务端**从来没有下发过**（也是恒默认值），
+// 那是客户端侧的协议兼容冗余，不在本接口的清理范围。
 type LoginRes struct {
-	MovieEngine      MovieEngine `json:"movieengine"`
-	Status           int64       `json:"status"`
-	MealName         string      `json:"mealname"`
-	DataURL          string      `json:"dataurl"`
-	AppURL           string      `json:"appurl"`
-	AppVer           string      `json:"appver"`
-	SetVer           int64       `json:"setver"`
-	AdText           string      `json:"adtext"`
-	ShowInterval     int64       `json:"showinterval"`
-	Exp              int64       `json:"exp"`
-	IP               string      `json:"ip"`
-	ShowTime         int64       `json:"showtime"`
-	ProvList         []string    `json:"provlist"`
-	ID               int64       `json:"id"`
-	Decoder          int64       `json:"decoder"`
-	BuffTimeOut      int64       `json:"buffTimeOut"`
-	TipUserNoReg     string      `json:"tipusernoreg"`
-	TipLoading       string      `json:"tiploading"`
-	TipUserForbidden string      `json:"tipuserforbidden"`
-	TipUserExpired   string      `json:"tipuserexpired"`
-	ArrSrc           []string    `json:"arrsrc"`
-	ArrProxy         []string    `json:"arrproxy"`
-	Location         string      `json:"location"`
-	NetType          string      `json:"nettype"`
-	AutoUpdate       int64       `json:"autoupdate"`
-	UpdateInterval   int64       `json:"updateinterval"`
-	RandKey          string      `json:"randkey"`
-	Exps             int64       `json:"exps"`
-	Stus             int64       `json:"stus"`
-	AdInfo           string      `json:"qqinfo"`
-}
+	Status   int64    `json:"status"`
+	MealName string   `json:"mealname"`
+	DataURL  string   `json:"dataurl"`
+	AppURL   string   `json:"appurl"`
+	AppVer   string   `json:"appver"`
+	AdText   string   `json:"adtext"`
+	IP       string   `json:"ip"`
+	ShowTime int64    `json:"showtime"`
+	ProvList []string `json:"provlist"`
+	ID               int64  `json:"id"`
+	Decoder          int64  `json:"decoder"`
+	BuffTimeOut      int64  `json:"buffTimeOut"`
+	TipUserNoReg     string `json:"tipusernoreg"`
+	TipLoading       string `json:"tiploading"`
+	TipUserForbidden string `json:"tipuserforbidden"`
+	TipUserExpired   string `json:"tipuserexpired"`
+	Location         string `json:"location"`
+	NetType          string `json:"nettype"`
+	RandKey          string `json:"randkey"`
+	AdInfo           string `json:"qqinfo"`}
 
 type GetverRes struct {
 	AppURL string `json:"appurl"`
@@ -39,11 +39,6 @@ type GetverRes struct {
 	UpSize string `json:"appsize"`
 	UpSets int64  `json:"appsets"`
 	UpText string `json:"apptext"`
-}
-
-// MovieEngine 是登录响应里下发给 APK 客户端的「点播引擎」配置。
-type MovieEngine struct {
-	Model []struct{} `json:"model"`
 }
 
 type ApkUser struct {
