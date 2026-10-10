@@ -167,9 +167,12 @@ func TestConfigYAMLRoundTripKeepsAllSections(t *testing.T) {
 	for _, key := range []string{
 		"server_url", "build", "app", "tips", "ad", "rss",
 		"proxy", "resolution", "epg", "system", "mytv",
-		"site",
+		"site", "ssl",
 		"site_name", "copyright", "show_ez", "show_mytv", "mytv_name", "show_other",
 		"short_url",
+		// ssl 段的子键：少了任何一个，这个开关就会在写盘时被抹掉
+		// （引擎在授权失效时会把整份 config.yml 重写一遍，键不齐就丢）。
+		"enable", "force_redirect", "port", "cert_name", "key_name",
 	} {
 		if !strings.Contains(text, key+":") {
 			t.Errorf("写出的 YAML 里缺少键 %q（管理端写盘会把它从 config.yml 抹掉）", key)

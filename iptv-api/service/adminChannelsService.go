@@ -854,7 +854,12 @@ func SaveCategory(req dto.ChannelsCategoryReq) dto.ReturnJsonDto {
 			go until.RemoveCaFromEpg(caIdInt)
 			go until.CleanAutoCacheAll()
 		} else {
-			go until.CleanMealsRssCacheAll()
+			// 普通分组也要清**聚合**缓存：聚合分组会把来源分组的 UA 带进
+			// "这条链接要不要继续走中转"的判据（引擎 aggregateNeedsProxy），
+			// 只清订阅缓存会让改完 UA 的聚合分组一直用旧结果 ——
+			// 现象是"分组里改了 UA，聚合分组里那条链接的中转/直连还是老样子"。
+			// CleanAutoCacheAll 内部已经包含 CleanMealsRssCacheAll，不必再单独调。
+			go until.CleanAutoCacheAll()
 		}
 	}
 	return dto.ReturnJsonDto{Code: 1, Msg: "操作成功", Type: "success"}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -371,11 +372,16 @@ func installMytvBase(tmp string) dto.ReturnJsonDto {
 }
 
 // MytvReleases 是 mytv 客户端自升级的版本检查端点（GET /api/mytv/releases，
-func MytvReleases() dto.MyTvDto {
+// base 为空时回落配置里 mytv 自己的连接地址（见 MytvServerUrl）。
+func MytvReleases(base string) dto.MyTvDto {
 	cfg := dao.GetConfig()
+	if strings.TrimSpace(base) == "" {
+		base = MytvServerUrl(cfg)
+	}
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	return dto.MyTvDto{
 		Version:     until.FormatMytvVersion(until.MytvPublishedBase(), cfg.MyTV.Version),
-		DownloadUrl: MytvServerUrl(cfg) + "/app/" + cfg.Site.MytvNameOr() + "-mytv.apk",
+		DownloadUrl: base + "/app/" + cfg.Site.MytvNameOr() + "-mytv.apk",
 		UpdateMsg:   cfg.MyTV.Update,
 	}
 }

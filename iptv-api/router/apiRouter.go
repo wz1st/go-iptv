@@ -150,6 +150,13 @@ var adminRoutes = []apiRoute{
 	// --- 关于 ---
 	{"about/data", api.AboutData},
 
+	// --- SSL 证书（系统菜单）---
+	// 证书/私钥固定落在 /config/cert（持久卷），开关与端口落在 config.yml 的 ssl 段；
+	// 保存时渲染 nginx 片段并 reload（见 until/sslUntil.go）。
+	{"ssl/data", api.SslData},
+	{"ssl/save", api.SslSave},
+	{"ssl/clear", api.SslClear},
+
 	// --- 引擎（改造前叫「授权 / license」）---
 	{"engine/data", api.EngineData},
 	{"engine/checkProxy", api.CheckProxy},

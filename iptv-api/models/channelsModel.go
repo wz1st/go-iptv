@@ -35,8 +35,13 @@ type IptvChannelShow struct {
 	EpgName    string `gorm:"column:epg_name" json:"epgName"`
 	CaName     string `gorm:"column:ca_name" json:"caName"`
 	Proxy      bool   `gorm:"column:proxy" json:"proxy"`
-	Logo       string `gorm:"-" json:"logo"`
-	PUrl       string `gorm:"-" json:"purl"`
+	// Ua 是**频道所属分组**的自定义 UA（JOIN `iptv_category.ua` 带出来的查询别名）。
+	// 聚合分组里它是"这条链接要不要继续走中转"的一半判据（见引擎 until/channels.go
+	// 的 aggregateNeedsProxy）：源分组没开中转但配了 UA 时，仍然要经中转取流。
+	// 普通分组里这个字段只用于展示，不参与地址选择。
+	Ua   string `gorm:"column:ua" json:"ua"`
+	Logo string `gorm:"-" json:"logo"`
+	PUrl string `gorm:"-" json:"purl"`
 }
 
 func (IptvChannelShow) TableName() string {

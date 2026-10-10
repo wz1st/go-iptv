@@ -7,7 +7,9 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk
 WORKDIR /app
 VOLUME /config
 
-EXPOSE 80
+# 对外端口：80 是必须的；443 只在后台「SSL 证书」页开启时才会被 nginx 监听
+# （compose 侧要跟着加 `-p 443:443`，否则宿主机上到不了）。
+EXPOSE 80 443
 
 COPY apktool/apktool apktool/apktool.jar /usr/bin/
 COPY client/Client.apk client/Version_client /app/client/
@@ -72,6 +74,12 @@ RUN apk add --no-cache \
 
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
 COPY nginx/proxy_params.inc /etc/nginx/conf.d/proxy_params.inc
+# 站点本体：:80 与可选的 :443 两个 server 共用同一份 location 规则
+COPY nginx/site.inc /etc/nginx/conf.d/site.inc
+
+# HTTPS 的可选配置与证书放在**持久卷**里（/config/nginx、/config/cert），
+# 由后台「SSL 证书」页生成；这里预建目录只是为了首次启动时通配 include 有目录可扫。
+RUN mkdir -p /config/nginx /config/cert
 
 COPY config.yml README.md dictionary.txt alias.json ChangeLog.md keystore.p12 /app/
 

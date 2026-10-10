@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"iptv-api/dao"
 	"iptv-api/dto"
 	"iptv-api/service"
 	"iptv-api/until"
@@ -30,7 +29,16 @@ func ApkLogin(c *gin.Context) {
 
 	dbUser := service.CheckUserDb(user, ip)
 
-	result := service.ApkLogin(dbUser)
+	// 下发地址（dataurl / appurl）按**本次请求的 scheme+host** 拼，拿不到才回落配置。
+	//
+	// 为什么不能只用配置里的 ServerUrl：站点一旦挂到 HTTPS（后台「SSL 证书」页开了 443），
+	// 配置里那条 http 地址就会让客户端拿到 `http://…/app/xxx.apk`，
+	// 而页面/客户端若是 https 上下文，这条明文地址会被浏览器按混合内容拦掉
+	// （控制台原话：The file at 'http://…apk' was loaded over an insecure connection.
+	// This file should be served over HTTPS）。
+	// 走请求基址就自动同协议：https 进来发 https，http 进来还是 http。
+	// 与 RSS 订阅地址、中转 purl 的基址口径完全一致（都走 until/clientBase）。
+	result := service.ApkLogin(dbUser, adminBase(c))
 
 	resObj, _ := json.Marshal(result)
 
@@ -41,7 +49,8 @@ func ApkLogin(c *gin.Context) {
 }
 
 func Getver(c *gin.Context) {
-	result := service.Getver()
+	// 与 ApkLogin 同一口径：下载地址按请求基址拼，避免站点上 HTTPS 后仍下发 http 明文包地址。
+	result := service.Getver(adminBase(c))
 	c.JSON(http.StatusOK, result)
 }
 
@@ -51,7 +60,8 @@ func GetBg(c *gin.Context) {
 		c.String(http.StatusOK, "")
 		return
 	}
-	c.String(http.StatusOK, dao.GetConfig().ServerUrl+"/images/bj/"+imgName)
+	// 同 ApkLogin：按请求基址拼，站点上 HTTPS 后不给客户端发明文地址。
+	c.String(http.StatusOK, adminBase(c)+"/images/bj/"+imgName)
 }
 
 func GetChannels(c *gin.Context) {

@@ -19,10 +19,13 @@ import (
 	"time"
 )
 
-func Getver() dto.GetverRes {
+// Getver 取客户端版本信息。base 是本次请求的对外基址（scheme://host[:port]），
+// 下载地址由它拼出 —— 空串时才回落配置里的 ServerUrl（见 api.Getver 的注释）。
+func Getver(base string) dto.GetverRes {
 	var res dto.GetverRes
 
 	var cfg = dao.GetConfig()
+	base = publicBase(base, cfg.ServerUrl)
 
 	// **必须下发完整四段**（基底.编译号），不能只给编译号。
 	//
@@ -38,7 +41,7 @@ func Getver() dto.GetverRes {
 	res.AppVer = until.FormatClientVersion(until.ClientPublishedBase(), cfg.Build.Version)
 	res.UpSets = cfg.App.Update.Set
 	res.UpText = until.FixedUpdateText
-	res.AppURL = cfg.ServerUrl + "/app/" + cfg.Build.Name + ".apk"
+	res.AppURL = base + "/app/" + cfg.Build.Name + ".apk"
 	// 路径必须是**线上包的真实落点** `/config/app/...`。
 	// 原来写的是相对路径 `./app/...`，运行目录是 `/app` 而包在持久卷 `/config/app/`，
 	// os.Stat 必然失败 ⇒ GetFileSize 恒返回 "0 MB"，客户端更新弹窗里的包大小一直是 0。
@@ -66,11 +69,21 @@ func GetBg() string {
 	return pngs[randomIndex]
 }
 
-func ApkLogin(user models.IptvUser) dto.LoginRes {
+// publicBase 归一下发地址用的对外基址：拿得到请求基址就用它，否则回落配置里的 ServerUrl。
+// 两个来源都要吃掉尾斜杠，避免拼出 `//app/`。
+func publicBase(base, fallback string) string {
+	if strings.TrimSpace(base) == "" {
+		base = fallback
+	}
+	return strings.TrimRight(strings.TrimSpace(base), "/")
+}
+
+func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
 
 	var result dto.LoginRes
 
 	var cfg = dao.GetConfig()
+	base = publicBase(base, cfg.ServerUrl)
 
 	result.IP = user.IP
 	// 账号以 json 字符串下发。客户端 `ServerConfig.accountId` 声明为 String，
@@ -90,8 +103,8 @@ func ApkLogin(user models.IptvUser) dto.LoginRes {
 	result.AppVer = cfg.Build.Version
 	result.BuffTimeOut = cfg.App.BuffTimeout
 	result.TipLoading = cfg.Tips.Loading
-	result.DataURL = cfg.ServerUrl + "/apk/channels"
-	result.AppURL = cfg.ServerUrl + "/app/" + cfg.Build.Name + ".apk"
+	result.DataURL = base + "/apk/channels"
+	result.AppURL = base + "/app/" + cfg.Build.Name + ".apk"
 	result.ShowTime = cfg.Ad.ShowTime
 	result.TipUserNoReg = "当前账号 " + user.Name + " " + cfg.Tips.UserNoReg
 	result.TipUserExpired = "当前账号 " + user.Name + " " + cfg.Tips.UserExpired
@@ -202,6 +215,9 @@ func GetChannels(channel dto.DataReqDto, base string) string {
 		resList = append(resList, dto.ChannelListDto{
 			ID:   int64(v.Sort + 3),
 			Name: v.Name,
+			// 分组自定义 UA 随分组一起下发：没开中转的分组下发的是直连源地址，
+			// 源站按 UA 放行时只能靠客户端自己带上（见 dto.ChannelListDto.Ua 注释）。
+			Ua:   v.UA,
 			Data: tmpData,
 		})
 	}

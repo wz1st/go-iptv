@@ -48,7 +48,9 @@ func MytvGetRssEpg(c *gin.Context) {
 }
 
 func MytvReleases(c *gin.Context) {
-	c.JSON(200, service.MytvReleases())
+	// 下载地址按请求基址拼，口径与骆驼的 Getver / ApkLogin 一致：
+	// 站点上 HTTPS 后不能再给客户端下发 http 明文包地址（混合内容会被拦）。
+	c.JSON(200, service.MytvReleases(adminBase(c)))
 }
 
 func getQingh() string {
