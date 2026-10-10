@@ -27,3 +27,9 @@ resolution:
 mytv:
   version: "1"
   update: test
+ssl:
+    enable: false
+    force_redirect: false
+    port: 443
+    cert_name: ''
+    key_name: ''

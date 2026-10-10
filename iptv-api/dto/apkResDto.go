@@ -12,26 +12,27 @@ package dto
 // `regionlimit` 等字段，服务端**从来没有下发过**（也是恒默认值），
 // 那是客户端侧的协议兼容冗余，不在本接口的清理范围。
 type LoginRes struct {
-	Status   int64    `json:"status"`
-	MealName string   `json:"mealname"`
-	DataURL  string   `json:"dataurl"`
-	AppURL   string   `json:"appurl"`
-	AppVer   string   `json:"appver"`
-	AdText   string   `json:"adtext"`
-	IP       string   `json:"ip"`
-	ShowTime int64    `json:"showtime"`
-	ProvList []string `json:"provlist"`
-	ID               int64  `json:"id"`
-	Decoder          int64  `json:"decoder"`
-	BuffTimeOut      int64  `json:"buffTimeOut"`
-	TipUserNoReg     string `json:"tipusernoreg"`
-	TipLoading       string `json:"tiploading"`
-	TipUserForbidden string `json:"tipuserforbidden"`
-	TipUserExpired   string `json:"tipuserexpired"`
-	Location         string `json:"location"`
-	NetType          string `json:"nettype"`
-	RandKey          string `json:"randkey"`
-	AdInfo           string `json:"qqinfo"`}
+	Status           int64    `json:"status"`
+	MealName         string   `json:"mealname"`
+	DataURL          string   `json:"dataurl"`
+	AppURL           string   `json:"appurl"`
+	AppVer           string   `json:"appver"`
+	AdText           string   `json:"adtext"`
+	IP               string   `json:"ip"`
+	ShowTime         int64    `json:"showtime"`
+	ProvList         []string `json:"provlist"`
+	ID               int64    `json:"id"`
+	Decoder          int64    `json:"decoder"`
+	BuffTimeOut      int64    `json:"buffTimeOut"`
+	TipUserNoReg     string   `json:"tipusernoreg"`
+	TipLoading       string   `json:"tiploading"`
+	TipUserForbidden string   `json:"tipuserforbidden"`
+	TipUserExpired   string   `json:"tipuserexpired"`
+	Location         string   `json:"location"`
+	NetType          string   `json:"nettype"`
+	RandKey          string   `json:"randkey"`
+	AdInfo           string   `json:"qqinfo"`
+}
 
 type GetverRes struct {
 	AppURL string `json:"appurl"`
@@ -52,9 +53,20 @@ type ApkUser struct {
 }
 
 type ChannelListDto struct {
-	ID   int64         `json:"-"`
-	Name string        `json:"name"`
-	Psw  string        `json:"psw"`
+	ID   int64  `json:"-"`
+	Name string `json:"name"`
+	Psw  string `json:"psw"`
+	// Ua 是该分组的**自定义 UA**（`iptv_category.ua`），随分组一起下发。
+	//
+	// 客户端播放这个分组里的链接时要把它作为 User-Agent，
+	// 优先级：下发 UA > 客户端自己设置的 UA > 客户端默认 UA
+	// （见客户端 `MediaLine.effectiveUserAgent`）。
+	//
+	// 为什么必须下发：分组没开中转时下发的是**直连源地址**，源站若按 UA 放行，
+	// 只有客户端自己带上这个 UA 才播得动 —— 中转那条路是引擎按分组 UA 取流的，
+	// 直连这条路没有别的地方能补上。
+	// 空串表示该分组没有配自定义 UA，客户端保持自己的设置。
+	Ua   string        `json:"ua"`
 	Data []ChannelData `json:"data"`
 	Tmp  string        `json:"tmp"`
 }

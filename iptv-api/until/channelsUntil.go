@@ -226,8 +226,9 @@ func CaGetChannels(category models.IptvCategory, show bool, base string) []model
 		cfg := dao.GetConfig()
 		var channels []models.IptvChannelShow
 		// ca_name / ca.proxy 是**查询别名**：普通分组里它们恒等于"本分组本身"，
+		// ca.ua 同理（本分组的自定义 UA），只用于展示与"为什么还在走中转"的解释。
 		dao.DB.Table(models.IptvChannelShow{}.TableName()+" AS c").
-			Select("c.*, e.name AS epg_name, ca.name AS ca_name, ca.proxy").
+			Select("c.*, e.name AS epg_name, ca.name AS ca_name, ca.proxy, ca.ua AS ua").
 			Joins("LEFT JOIN "+models.IptvEpg{}.TableName()+" AS e ON c.epg_id = e.id AND e.status = 1").
 			Joins("LEFT JOIN "+models.IptvCategory{}.TableName()+" AS ca ON c.category_id = ca.id").
 			Where("c.category_id = ?", category.ID).

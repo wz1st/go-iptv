@@ -96,6 +96,28 @@ func (s Site) MytvNameOr() string {
 	return "清和IPTV"
 }
 
+// SSL 是后台「SSL 证书」页的设置（开关 443 / 80 强制跳转 / 端口）。
+//
+// **yaml 标签必须与引擎侧 dto.SSL 完全一致。** 引擎在授权失效时会把自己的
+// dto.Config 整体重写回 config.yml（dao.SaveConfigToFile），字段（名字）对不齐，
+// 那一次重写就会把整段 ssl 丢掉 —— 表现为"授权一过期，HTTPS 就悄悄关掉了"。
+// 本段引擎不消费，放在两边纯粹是为了让整体重写不丢字段。
+//
+// 证书与私钥本身**不在这里**：它们固定落在 /config/cert/server.crt|server.key，
+// 由 until/sslUntil.go 管理；这里只记原始上传文件名，供界面显示来源。
+type SSL struct {
+	// Enable 为真时 nginx 会监听 HTTPS 端口（默认 443）。
+	Enable bool `mapstructure:"enable" json:"enable" yaml:"enable"`
+	// ForceRedirect 为真时 80 端口的请求整体 301 到 HTTPS。
+	ForceRedirect bool `mapstructure:"force_redirect" json:"forceRedirect" yaml:"force_redirect"`
+	// Port 是 HTTPS 监听端口，0 视为 443。
+	Port int `mapstructure:"port" json:"port" yaml:"port"`
+	// CertName / KeyName 是**用户上传时的原始文件名**，仅用于界面显示；
+	// 落盘名恒为 server.crt / server.key（nginx 配置里写死）。
+	CertName string `mapstructure:"cert_name" json:"certName" yaml:"cert_name"`
+	KeyName  string `mapstructure:"key_name" json:"keyName" yaml:"key_name"`
+}
+
 type Config struct {
 	ServerUrl  string     `mapstructure:"server_url" json:"server_url" yaml:"server_url"`
 	Build      Build      `mapstructure:"build" json:"build" yaml:"build"`
@@ -109,5 +131,6 @@ type Config struct {
 	System     System     `mapstructure:"system" json:"system" yaml:"system"`
 	MyTV       MyTV       `mapstructure:"mytv" json:"mytv" yaml:"mytv"`
 	Site       Site       `mapstructure:"site" json:"site" yaml:"site"`
+	SSL        SSL        `mapstructure:"ssl" json:"ssl" yaml:"ssl"`
 	// Weather   Weather   `mapstructure:"weather" json:"weather" yaml:"weather"`
 }

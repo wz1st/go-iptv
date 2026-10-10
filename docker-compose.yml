@@ -6,6 +6,9 @@ services:
     privileged: true
     ports:
       - "8090:80" # 不支持host模式，存在不少的端口冲突
+      # HTTPS：只有后台「SSL 证书」页开了 443 才会真正被监听。
+      # 宿主机 443 被占用时删掉这一行即可（那就只能用 http 访问，HTTPS 开关也会报绑定失败）。
+      - "443:443"
     volumes:
       - ./data:/config
     restart: unless-stopped

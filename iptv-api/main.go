@@ -7,6 +7,7 @@ import (
 	"iptv-api/crontab"
 	"iptv-api/dao"
 	"iptv-api/router"
+	"iptv-api/service"
 	"iptv-api/until"
 	"log"
 	"os"
@@ -135,6 +136,20 @@ func main() {
 	go crontab.Crontab()
 	go crontab.EpgCron()
 	go until.InitCacheRebuild()
+
+	// SSL：容器重建后 /config 里的证书还在、config.yml 也还在，但 /config/nginx
+	// 下生成的片段**可能丢了**（换过部署方式、手工删过）。按配置重放一次，
+	// 否则症状是"config.yml 里写着 HTTPS 开着，实际 80/443 都上不去"。
+	//
+	// 放 goroutine 且延后几秒：它要跑 `nginx -t` / `nginx -s reload`，
+	// 得等启动器把 nginx 拉起来（nginx 没在跑时 `-s reload` 会直接失败），
+	// 而且不该挡住接口启动。失败只记日志 —— HTTPS 没配好不该拦启动。
+	go func() {
+		time.Sleep(3 * time.Second)
+		if err := service.SSLReconcile(); err != nil {
+			log.Println("SSL 配置重建失败（不影响启动）:", err)
+		}
+	}()
 
 	if !debug {
 		bootstrap.InitJwtKey() // 初始化JWTkey
