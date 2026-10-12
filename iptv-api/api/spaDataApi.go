@@ -130,6 +130,46 @@ func ClientData(c *gin.Context) {
 	c.JSON(200, pageData)
 }
 
+// QingheData 对应「清和壳」客户端设置页：配置项（站点地址 / 应用设置 / 提示 / 图标 /
+// 背景）与 骆驼壳 共用，只是编译卡片走清和壳自己的基底与版本（见 until.ClientQh*）。
+func QingheData(c *gin.Context) {
+	_, ok := until.GetAuthName(c)
+	if !ok {
+		c.JSON(200, dto.NewAdminRedirectDto())
+		return
+	}
+	cfg := dao.GetConfig()
+
+	official := bootstrap.OfficialAPKPath(until.ClientQhName)
+	staged := bootstrap.StagedAPKPath(until.ClientQhName)
+
+	pageData := dto.AdminClientDto{
+		Title:       "清和壳客户端设置",
+		ServerUrl:   cfg.ServerUrl,
+		Build:       cfg.BuildQh,
+		App:         cfg.App,
+		Tips:        cfg.Tips,
+		ApkUrl:      "/app/" + until.ClientQhName + ".apk",
+		ApkName:     bootstrap.APKDownloadName(until.ClientQhName, cfg.BuildQh.Version),
+		UpSize:      until.GetFileSize(official),
+		ApkMd5:      until.Md5File(official),
+		NewVersion:  cfg.BuildQh.NewVersion,
+		NewSize:     until.GetFileSize(staged),
+		NewMd5:      until.Md5File(staged),
+		NewApkUrl:   "/app/" + until.ClientQhName + "-new.apk",
+		NewApkName:  bootstrap.APKDownloadName(until.ClientQhName, cfg.BuildQh.NewVersion),
+		NewExists:   until.Exists(staged),
+		BuildStatus: bootstrap.GetBuildStatus(),
+	}
+
+	if until.Exists("/config/images/icon/icon.png") {
+		pageData.IconUrl = "/icon/icon.png"
+	}
+	pageData.BjUrl, _ = until.GetPngFileNames("/config/images/bj")
+
+	c.JSON(200, pageData)
+}
+
 // ClientMyTVData 对应 html.ClientMyTV。
 func ClientMyTVData(c *gin.Context) {
 	_, ok := until.GetAuthName(c)

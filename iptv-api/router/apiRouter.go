@@ -139,6 +139,15 @@ var adminRoutes = []apiRoute{
 	{"client/checkBase", api.ClientCheckBase},
 	{"client/upgradeBase", api.ClientUpgradeBase},
 
+	// 清和壳（独立客户端基底）：与 骆驼壳 各自一组路由，编译接口共用 BuildClientApk。
+	{"client/qh/data", api.QingheData},
+	{"client/qh/appInfo", api.QingheAppInfo},
+	{"client/qh/buildStatus", api.QingheBuildStatus},
+	{"client/qh/publish", api.QinghePublish},
+	{"client/qh/uploadBaseApk", api.QingheUploadBaseApk},
+	{"client/qh/checkBase", api.QingheCheckBase},
+	{"client/qh/upgradeBase", api.QingheUpgradeBase},
+
 	// 公告：它保存的就是客户端启动时弹出的那条文案（显示时长、显示间隔都是
 	{"client/noticeData", api.NoticeData},
 	{"client/noticeSave", api.Notice},

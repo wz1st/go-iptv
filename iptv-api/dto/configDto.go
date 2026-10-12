@@ -121,6 +121,9 @@ type SSL struct {
 type Config struct {
 	ServerUrl  string     `mapstructure:"server_url" json:"server_url" yaml:"server_url"`
 	Build      Build      `mapstructure:"build" json:"build" yaml:"build"`
+	// BuildQh 是「清和壳」客户端的独立编译版本号（与 骆驼壳 互不影响）。
+	// 产品名固定为 Client_qh（见 until.ClientQhName），不在此处配置。
+	BuildQh    Build      `mapstructure:"build_qh" json:"buildQh" yaml:"build_qh"`
 	App        App        `mapstructure:"app" json:"app" yaml:"app"`
 	Tips       Tips       `mapstructure:"tips" json:"tips" yaml:"tips"`
 	Ad         Ad         `mapstructure:"ad" json:"ad" yaml:"ad"`

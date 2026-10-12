@@ -50,6 +50,12 @@ func ApkLogin(c *gin.Context) {
 
 func Getver(c *gin.Context) {
 	// 与 ApkLogin 同一口径：下载地址按请求基址拼，避免站点上 HTTPS 后仍下发 http 明文包地址。
+	// 清和壳 apk 在请求里带 ?shell=qh，据此分流到各自的版本信息（共用同一入口）。
+	if c.Query("shell") == "qh" {
+		result := service.GetverQh(adminBase(c))
+		c.JSON(http.StatusOK, result)
+		return
+	}
 	result := service.Getver(adminBase(c))
 	c.JSON(http.StatusOK, result)
 }

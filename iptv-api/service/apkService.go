@@ -50,6 +50,25 @@ func Getver(base string) dto.GetverRes {
 	return res
 }
 
+// GetverQh 取「清和壳」客户端版本信息。口径与 Getver 完全一致，只是基底取
+// ClientPublishedQhBase、版本号拼 cfg.BuildQh、下载地址指向 /app/Client_qh.apk。
+//
+// 清和壳 apk 在 getver 请求里带 `?shell=qh`（见 client/smali g$3.smali 的改写），
+// api 层据此路由到本函数 —— 两套壳共用同一个 Getver 入口，只按 shell 分流。
+func GetverQh(base string) dto.GetverRes {
+	var res dto.GetverRes
+
+	cfg := dao.GetConfig()
+	base = publicBase(base, cfg.ServerUrl)
+
+	res.AppVer = until.FormatClientVersion(until.ClientPublishedQhBase(), cfg.BuildQh.Version)
+	res.UpSets = cfg.App.Update.Set
+	res.UpText = until.FixedUpdateText
+	res.AppURL = base + "/app/" + until.ClientQhName + ".apk"
+	res.UpSize = until.GetFileSize(bootstrap.OfficialAPKPath(until.ClientQhName))
+	return res
+}
+
 func GetBg() string {
 	// 获取指定目录下的所有png文件
 	dir := "/config/images/bj"
@@ -119,12 +138,14 @@ func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
 }
 
 // GetChannels 取 APK 客户端的频道列表。
+//
+// 不再预置「我的收藏」分组：该分组原由服务端硬编码下发明文，
+// 两个壳（骆驼壳/清和壳）都据此渲染收藏入口。按需求隐藏收藏功能后，
+// 这里直接不再下发该分组 —— apk 侧对分组名做 `.equals("我的收藏")` 判断，
+// 收不到就永远走不到收藏分支（不会崩，只是收藏入口消失）。
+// 收藏本身是 apk 本地库的行为，服务端不下发展示分组即视为"隐藏"。
 func GetChannels(channel dto.DataReqDto, base string) string {
-	resList := []dto.ChannelListDto{{
-		Name: "我的收藏",
-		Data: []dto.ChannelData{},
-		Tmp:  "6L+Z5Y+q5piv5Y2g5L2N77yM5LiN54S25rKh6aKR6YGT5a655piT5Ye6546w6ZSZ6K+v77yM5LirYXBr5Yqg5a+G5pWw5o2u6ZyA6KaB5YWI5YigMTI45a2X6IqC77yM5rKh6aKR6YGT5bCx5LiN5aSfMTI4",
-	}}
+	resList := []dto.ChannelListDto{}
 
 	var dbUser models.IptvUser
 	err := dao.DB.Where("mac = ?", channel.Mac).First(&dbUser).Error

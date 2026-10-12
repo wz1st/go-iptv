@@ -108,6 +108,60 @@ func BuildAPK(staged bool) bool {
 	return true
 }
 
+// BuildQingheAPK 编译「清和壳」客户端 APK —— 与 BuildAPK 同构，但基底、产品名、
+// 版本号各自独立（见 until.ClientQh* / dto.Config.BuildQh）。
+//
+// **编译接口（BuildClientApk）是两套壳共用的**：只换基底文件与注入值，解包→改写
+// →重编→签名的流程一字不改。这就是"仅 apk 的接口共用"的含义。
+func BuildQingheAPK(staged bool) bool {
+	SetBuildStatus(1) // 编译中
+	defer SetBuildStatus(0)
+
+	log.Println("开始编译清和壳客户端APK ...")
+	cfg := dao.GetConfig()
+
+	buildNo := cfg.BuildQh.Version
+	apkPath := OfficialAPKPath(until.ClientQhName)
+	if staged {
+		buildNo = cfg.BuildQh.NewVersion
+		apkPath = StagedAPKPath(until.ClientQhName)
+	}
+	if buildNo == "" {
+		log.Println("清和壳版本号为空，跳过编译")
+		return false
+	}
+
+	baseApk := until.ClientQhBaseDir() + "/Client_qh.apk"
+	if !until.Exists(baseApk) {
+		log.Println("找不到清和壳编译基底:", baseApk, "，请先上传或在线升级基底")
+		return false
+	}
+
+	// 先把旧产物挪走：apktool 写失败时会留下半截 APK，而它会顶替掉线上包的位置。
+	_ = os.Remove(apkPath)
+
+	base := until.GetClientQhBaseVersion()
+	workDir := filepath.Join(os.TempDir(), fmt.Sprintf("qinghe_build_%d", time.Now().UnixNano()))
+	values := until.ClientBuildValues{
+		ServerURL:   clientApkHost(cfg.ServerUrl),
+		AppName:     until.ClientQhName,
+		Version:     buildNo,
+		VersionName: until.FormatClientVersion(base, buildNo),
+		IconPath:       clientIconPath(),
+		BackgroundPath: clientBackgroundPath(),
+	}
+
+	err := until.BuildClientApk(baseApk, apkPath, workDir, values)
+	defer os.RemoveAll(workDir)
+	if err != nil {
+		log.Println("清和壳客户端APK编译失败:", err)
+		return false
+	}
+
+	log.Println("清和壳客户端APK编译完成:", apkPath)
+	return true
+}
+
 // clientApkHost 把配置里的站点基址归一成客户端要的那个地址。
 //
 // 两个字段语义不同，不能直接共用：
