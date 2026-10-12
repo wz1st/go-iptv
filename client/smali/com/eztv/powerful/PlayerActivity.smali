@@ -8058,18 +8058,18 @@
     :cond_3
     iget-object v0, p0, Lcom/eztv/powerful/PlayerActivity;->cE:Landroid/widget/Button;
 
-    const-string v1, "\u5207\u6362\u5230\u70b9\u64ad"
+    const/4 v1, 0x8
 
-    invoke-virtual {v0, v1}, Landroid/widget/Button;->setText(Ljava/lang/CharSequence;)V
+    invoke-virtual {v0, v1}, Landroid/widget/Button;->setVisibility(I)V
 
     goto/16 :goto_0
 
     :cond_4
     iget-object v0, p0, Lcom/eztv/powerful/PlayerActivity;->cF:Landroid/widget/Button;
 
-    const-string v1, "\u5207\u6362\u56de\u70b9\u64ad"
+    const/4 v1, 0x8
 
-    invoke-virtual {v0, v1}, Landroid/widget/Button;->setText(Ljava/lang/CharSequence;)V
+    invoke-virtual {v0, v1}, Landroid/widget/Button;->setVisibility(I)V
 
     goto/16 :goto_1
 .end method
@@ -18342,7 +18342,7 @@
 
     invoke-direct {p0, v0, p1}, Lcom/eztv/powerful/PlayerActivity;->b(II)V
 
-    const-string v0, "\u53d6\u6d88\u6536\u85cf\uff01"
+    const-string v0, ""
 
     invoke-static {v0, v1}, Lcom/eztv/powerful/PlayerActivity;->a(Ljava/lang/String;I)V
 
@@ -18407,7 +18407,7 @@
 
     invoke-direct {p0, v0, p1}, Lcom/eztv/powerful/PlayerActivity;->a(II)V
 
-    const-string v0, "\u5df2\u7ecf\u4e3a\u4f60\u6536\u85cf\u5566\uff01"
+    const-string v0, ""
 
     invoke-static {v0, v1}, Lcom/eztv/powerful/PlayerActivity;->a(Ljava/lang/String;I)V
 
@@ -19013,7 +19013,7 @@
 
     if-nez v0, :cond_0
 
-    const-string v0, "\u63a8\u8350\u9875\u9762\u4e0d\u80fd\u6536\u85cf\u54c8\uff01"
+    const-string v0, ""
 
     const/4 v2, 0x0
 
@@ -19039,7 +19039,7 @@
 
     if-ne v0, v2, :cond_1
 
-    const-string v0, "\u63a8\u8350\u9875\u9762\u4e0d\u80fd\u6536\u85cf\u54c8\uff01"
+    const-string v0, ""
 
     const/4 v2, 0x0
 
@@ -19054,7 +19054,7 @@
     :catch_0
     move-exception v0
 
-    const-string v0, "\u63a8\u8350\u9875\u9762\u4e0d\u80fd\u6536\u85cf\u54c8\uff01"
+    const-string v0, ""
 
     invoke-static {v0, v1}, Lcom/eztv/powerful/PlayerActivity;->a(Ljava/lang/String;I)V
 
@@ -19125,7 +19125,7 @@
 
     invoke-direct {p0, v2, v0, p1}, Lcom/eztv/powerful/PlayerActivity;->a(Ljava/lang/String;Ljava/lang/String;I)V
 
-    const-string v0, "\u53d6\u6d88\u6536\u85cf\uff01"
+    const-string v0, ""
 
     invoke-static {v0, v1}, Lcom/eztv/powerful/PlayerActivity;->a(Ljava/lang/String;I)V
 
@@ -19150,7 +19150,7 @@
     :cond_2
     invoke-direct {p0, p1}, Lcom/eztv/powerful/PlayerActivity;->o(I)V
 
-    const-string v0, "\u5df2\u7ecf\u4e3a\u4f60\u6536\u85cf\u5566\uff01"
+    const-string v0, ""
 
     invoke-static {v0, v1}, Lcom/eztv/powerful/PlayerActivity;->a(Ljava/lang/String;I)V
 
@@ -19217,7 +19217,7 @@
 
     invoke-direct {p0, v2, v0, p1}, Lcom/eztv/powerful/PlayerActivity;->a(Ljava/lang/String;Ljava/lang/String;I)V
 
-    const-string v0, "\u53d6\u6d88\u6536\u85cf\uff01"
+    const-string v0, ""
 
     invoke-static {v0, v1}, Lcom/eztv/powerful/PlayerActivity;->a(Ljava/lang/String;I)V
 
@@ -19228,7 +19228,7 @@
     :cond_4
     invoke-direct {p0, p1}, Lcom/eztv/powerful/PlayerActivity;->o(I)V
 
-    const-string v0, "\u5df2\u7ecf\u4e3a\u4f60\u6536\u85cf\u5566\uff01"
+    const-string v0, ""
 
     invoke-static {v0, v1}, Lcom/eztv/powerful/PlayerActivity;->a(Ljava/lang/String;I)V
 

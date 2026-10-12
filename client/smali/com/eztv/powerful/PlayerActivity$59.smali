@@ -99,7 +99,7 @@
 
     sput v0, Lcom/eztv/powerful/PlayerActivity;->i:I
 
-    const-string v0, "\u5207\u6362\u5230\u4e86\u300e\u70b9\u64ad\u300f\u6a21\u5f0f,\u6253\u5f00\u5217\u8868\u770b\u770b\u5427!"
+    const-string v0, ""
 
     invoke-static {v0, v2}, Lcom/eztv/powerful/PlayerActivity;->a(Ljava/lang/String;I)V
 
