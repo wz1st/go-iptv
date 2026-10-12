@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:background="@drawable/item_bg_result_movie" android:focusable="true" android:focusableInTouchMode="true" android:clickable="true" android:layout_width="@dimen/px260" android:layout_height="@dimen/px350" android:layout_margin="@dimen/px20"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:layout_gravity="center" android:id="@id/local_movie_image" android:layout_width="@dimen/px400" android:layout_height="@dimen/px250" android:layout_marginTop="@dimen/px10" android:src="@drawable/icon" />
+    <com.view.MarqueeTextView android:textSize="@dimen/px40" android:textColor="@color/white" android:ellipsize="end" android:layout_gravity="center" android:id="@id/local_movie_name" android:paddingLeft="@dimen/px10" android:paddingRight="@dimen/px10" android:visibility="visible" android:layout_width="wrap_content" android:layout_height="wrap_content" android:singleLine="true" android:marqueeRepeatLimit="marquee_forever" />
+    <TextView android:textSize="@dimen/px28" android:textColor="@color/blue" android:layout_gravity="center" android:id="@id/local_movie_duration" android:visibility="visible" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+</LinearLayout>

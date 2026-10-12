@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="bottom|center" android:orientation="vertical" android:paddingBottom="20.0dip" android:layout_width="fill_parent" android:layout_height="wrap_content" android:layout_marginBottom="@dimen/px30"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <LinearLayout android:gravity="center" android:orientation="vertical" android:id="@id/ll_play" android:layout_width="fill_parent" android:layout_height="0.0dip" android:layout_weight="1.0">
+        <ImageView android:id="@id/iv_play" android:background="@drawable/start_play" android:layout_width="120.0sp" android:layout_height="120.0sp" />
+    </LinearLayout>
+    <LinearLayout android:gravity="center" android:orientation="horizontal" android:id="@id/bar_layout" android:background="@drawable/bg_progress_bar_out" android:paddingLeft="10.0dip" android:paddingTop="5.0dip" android:paddingRight="10.0dip" android:paddingBottom="5.0dip" android:layout_width="fill_parent" android:layout_height="wrap_content" android:layout_marginLeft="15.0dip" android:layout_marginRight="15.0dip" android:layout_marginBottom="@dimen/px30">
+        <ImageView android:id="@id/iv_playpause" android:background="@drawable/icon_pause" android:layout_width="30.0dip" android:layout_height="30.0dip" />
+        <TextView android:textColor="#ffffffff" android:id="@id/tv_currentpos" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginLeft="15.0dip" android:layout_marginRight="5.0dip" android:text="00:00:00" />
+        <SeekBar android:id="@id/pb_progressbar" android:background="@null" android:padding="6.0dip" android:layout_width="0.0dip" android:layout_height="30.0dip" android:maxHeight="3.0dip" android:max="100" android:progress="30" android:progressDrawable="@drawable/ez_layer_progress_bar" android:minHeight="3.0dip" android:thumb="@drawable/ez_seekbar_thumb" android:thumbOffset="0.0dip" android:layout_weight="1.0" android:paddingStart="5.0dip" android:paddingEnd="5.0dip" />
+        <TextView android:textColor="#ffffffff" android:id="@id/tv_duration" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginLeft="5.0dip" android:text="00:00:00" />
+        <TextView android:textColor="#ffffffff" android:gravity="center_vertical" android:id="@id/tv_tiny_win" android:background="@drawable/bg_ripple" android:paddingLeft="5.0dip" android:paddingRight="5.0dip" android:clickable="true" android:layout_width="wrap_content" android:layout_height="fill_parent" android:layout_marginLeft="5.0dip" android:text="小窗" />
+    </LinearLayout>
+</LinearLayout>

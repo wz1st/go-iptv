@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="activity_horizontal_margin">64.0dip</dimen>
+    <dimen name="channel_epg_size">15.0sp</dimen>
+    <dimen name="channel_epg_width">650.0sp</dimen>
+    <dimen name="channel_name_size">15.0sp</dimen>
+    <dimen name="channel_num_size">20.0sp</dimen>
+    <dimen name="channel_text_size">20.0sp</dimen>
+    <dimen name="divider_height">2.0sp</dimen>
+    <dimen name="setting_text_size">20.0sp</dimen>
+</resources>

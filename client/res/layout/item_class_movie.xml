@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center_vertical" android:layout_gravity="center" android:orientation="horizontal" android:background="@drawable/item_bg_source_movie" android:focusable="true" android:focusableInTouchMode="true" android:clickable="true" android:layout_width="wrap_content" android:layout_height="fill_parent" android:layout_marginLeft="@dimen/px20" android:layout_marginTop="@dimen/px20" android:layout_marginRight="@dimen/px20" android:layout_marginBottom="@dimen/px20"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textSize="@dimen/px33" android:textColor="@color/white" android:gravity="center" android:id="@id/movie_class_name" android:paddingLeft="@dimen/px20" android:paddingRight="@dimen/px20" android:layout_width="wrap_content" android:layout_height="fill_parent" />
+</LinearLayout>

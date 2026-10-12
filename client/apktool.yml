@@ -1,0 +1,26 @@
+!!brut.androlib.meta.MetaInfo
+apkFileName: DSMTV.apk
+compressionType: false
+doNotCompress:
+- resources.arsc
+- png
+- res/drawable-hdpi-v4/ic_search.webp
+- ogg
+isFrameworkApk: false
+packageInfo:
+  forcedPackageId: '127'
+  renameManifestPackage: cn.dsmtv.player
+sdkInfo:
+  minSdkVersion: '17'
+  targetSdkVersion: '23'
+sharedLibrary: false
+sparseResources: false
+unknownFiles: {}
+usesFramework:
+  ids:
+  - 1
+  tag: null
+version: 2.5.0
+versionInfo:
+  versionCode: '1'
+  versionName: 0.25.5.4

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:gravity="center" android:id="@id/indicator_container" android:layout_width="wrap_content" android:layout_height="wrap_content">
+        <TextView android:textSize="13.0sp" android:ellipsize="end" android:id="@id/isb_progress" android:paddingLeft="8.0dip" android:paddingTop="4.0dip" android:paddingRight="8.0dip" android:paddingBottom="4.0dip" android:layout_width="wrap_content" android:layout_height="wrap_content" android:minWidth="12.0dip" android:text="Indicator" android:maxLines="1" />
+    </LinearLayout>
+    <com.warkiz.widget.ArrowView android:layout_gravity="center_horizontal" android:id="@id/indicator_arrow" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+</LinearLayout>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center" android:orientation="horizontal" android:background="@drawable/item_bg_source_movie" android:focusable="true" android:focusableInTouchMode="true" android:clickable="true" android:layout_width="@dimen/px140" android:layout_height="fill_parent" android:layout_margin="@dimen/px20"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <com.view.MarqueeTextView android:textSize="@dimen/px35" android:textColor="@color/white" android:ellipsize="end" android:layout_gravity="center" android:id="@id/source_name" android:paddingLeft="@dimen/px5" android:paddingRight="@dimen/px5" android:layout_width="wrap_content" android:layout_height="wrap_content" android:singleLine="true" android:marqueeRepeatLimit="marquee_forever" />
+</LinearLayout>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<android.support.constraint.ConstraintLayout android:layout_gravity="left" android:layout_width="@dimen/px1304" android:layout_height="fill_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <com.view.EzChannelListView android:id="@id/vg_setting_info" android:background="@drawable/setting_bg" android:layout_width="@dimen/px300" android:layout_height="fill_parent" app:focusOutEnd="true" app:focusOutFront="true" app:layout_constraintLeft_toLeftOf="parent" app:layout_constraintTop_toTopOf="parent" />
+    <View android:id="@id/view_space" android:background="#ff4f4f4f" android:layout_width="2.0px" android:layout_height="fill_parent" app:layout_constraintLeft_toRightOf="@id/vg_setting_info" app:layout_constraintTop_toTopOf="parent" />
+    <com.view.EzChannelListView android:id="@id/vg_setting_classification" android:background="@drawable/setting_bg" android:layout_width="@dimen/px245" android:layout_height="fill_parent" android:layout_toRightOf="@id/view_space" app:focusOutEnd="true" app:focusOutFront="true" app:layout_constraintLeft_toRightOf="@id/view_space" app:layout_constraintTop_toTopOf="parent" />
+</android.support.constraint.ConstraintLayout>

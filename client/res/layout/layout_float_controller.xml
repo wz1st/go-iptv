@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:layout_width="fill_parent" android:layout_height="fill_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:layout_gravity="center" android:id="@id/start_play" android:background="@drawable/shape_play_bg" android:padding="@dimen/px10" android:layout_width="@dimen/px110" android:layout_height="@dimen/px110" android:src="@drawable/selector_play_button" />
+    <ImageView android:layout_gravity="end" android:id="@id/btn_close" android:layout_width="20.0dip" android:layout_height="20.0dip" android:layout_margin="4.0dip" android:src="@drawable/ic_action_close" />
+    <ImageView android:id="@id/btn_skip" android:layout_width="20.0dip" android:layout_height="20.0dip" android:layout_margin="4.0dip" android:src="@drawable/ic_action_fullscreen" />
+</FrameLayout>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="channel_epg_size">17.0sp</dimen>
+    <dimen name="channel_epg_width">850.0sp</dimen>
+    <dimen name="channel_name_size">20.0sp</dimen>
+    <dimen name="channel_num_size">30.0sp</dimen>
+    <dimen name="channel_text_size">30.0sp</dimen>
+    <dimen name="channel_text_width">180.0sp</dimen>
+    <dimen name="divider_height">4.0sp</dimen>
+    <dimen name="setting_text_size">30.0sp</dimen>
+</resources>
