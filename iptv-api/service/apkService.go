@@ -161,11 +161,18 @@ func IsLuotuoAppName(appName string) bool {
 // 随之不同（until.GetAesKey / GetAesKeyLt），客户端各用自己那份去解。用错一边
 // 的表现是「登录正常、频道列表永远空」—— 解密失败不会报错，只是解出乱码。
 //
-// 不再预置「我的收藏」分组：该分组原由服务端硬编码下发明文，
-// 两个壳（清和壳/骆驼壳）都据此渲染收藏入口。按需求隐藏收藏功能后，
-// 这里直接不再下发该分组 —— apk 侧对分组名做 `.equals("我的收藏")` 判断，
-// 收不到就永远走不到收藏分支（不会崩，只是收藏入口消失）。
-// 收藏本身是 apk 本地库的行为，服务端不下发展示分组即视为"隐藏"。
+// 本轮恢复了预置的「我的收藏」分组占位。它此前被当成"收藏功能的入口"整块删掉，
+// 但它其实**兼任两件事**，删掉它会让客户端整个分组表错位：
+//
+//  1. 它是**索引锚点**。真实分组拿的 ID 是 `v.Sort + 3`（≥3），占位分组 ID 为 0，
+//     下面按 ID 升序排 ⇒ 占位组永远落在下标 0，真实分组从下标 1 起。删掉它，
+//     真实分组的整体下标**左移一位**；而客户端把"在看哪个分组"按下标持久化
+//     （`PlayerActivity.d`），一旦存的是 1 而列表只剩 1 项，取分组就越界。
+//  2. 它是**长度填充**。`Tmp` 里那句说明（base64）自己写明了：客户端解码要
+//     先砍掉载荷前面 128 字符的头，载荷太短凑不满，连够长的正常列表都解不开。
+//
+// 放回它正是为了验证"骆驼壳分组在、频道栏空白、不起播"是否由当初删掉它引起。
+// 若确认，隐藏收藏应改用"保留该组、只改展示"的办法，而不是把这一组从下发数据里拿掉。
 func GetChannels(channel dto.DataReqDto, base string, lt bool) string {
 	// 载荷密钥：按壳取。放在最前面算一次，两条返回路径（"该套餐无频道"与正常列表）
 	// 都用同一把 —— 漏改任一条，那种情况下的客户端就永远解不开。
@@ -174,7 +181,11 @@ func GetChannels(channel dto.DataReqDto, base string, lt bool) string {
 		appKey = until.GetAesKeyLt()
 	}
 
-	resList := []dto.ChannelListDto{}
+	resList := []dto.ChannelListDto{{
+		Name: "我的收藏",
+		Data: []dto.ChannelData{},
+		Tmp:  "6L+Z5Y+q5piv5Y2g5L2N77yM5LiN54S25rKh6aKR6YGT5a655piT5Ye6546w6ZSZ6K+v77yM5LirYXBr5Yqg5a+G5pWw5o2u6ZyA6KaB5YWI5YigMTI45a2X6IqC77yM5rKh6aKR6YGT5bCx5LiN5aSfMTI4",
+	}}
 
 	var dbUser models.IptvUser
 	err := dao.DB.Where("mac = ?", channel.Mac).First(&dbUser).Error
