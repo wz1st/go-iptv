@@ -51,7 +51,11 @@ var pagePaths = []string{
 
 // assetPaths 是「与安装态无关的公共静态资源」。
 var assetPaths = []string{
-	"/images/bj/a.png", "/icon/icon.png", "/logo/a.png", "/app/a.apk", "/static/a.png",
+	"/images/bj/a.png", "/icon/icon.png",
+	// 骆驼壳那一套素材（主槽位，目录 /config/images/lt/*）也必须在两种安装态下
+	// 都可达 —— 漏了白名单的症状是未安装向导页里骆驼壳的预览图全是 403。
+	"/lt/images/a.png", "/lt/icon/icon.png",
+	"/logo/a.png", "/app/a.apk", "/static/a.png",
 }
 
 // apiPaths 是需要在门禁下观察的接口路径。

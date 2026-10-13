@@ -72,7 +72,13 @@ func Install() (bool, string) {
 		return false, err.Error()
 	}
 
-	cmd := exec.Command("bash", "-c", "mkdir -p /config/images/icon && mkdir -p /config/images/bj && mkdir -p /config/cache")
+	// 两个壳各一套上传素材目录（图标 + 背景图池）：清和壳 /config/images/{icon,bj}，
+	// 骆驼壳 /config/images/lt/{icon,bj}。**两套都要建** —— 缺哪个，那个壳的
+	// 「上传图标 / 上传背景」就会因为目标目录不存在而保存失败。
+	cmd := exec.Command("bash", "-c",
+		"mkdir -p /config/images/icon && mkdir -p /config/images/bj"+
+			" && mkdir -p /config/images/lt/icon && mkdir -p /config/images/lt/bj"+
+			" && mkdir -p /config/cache")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Println("创建/config子文件夹失败", err, string(output))

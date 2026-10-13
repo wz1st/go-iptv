@@ -147,6 +147,13 @@ var adminRoutes = []apiRoute{
 	{"client/lt/uploadBaseApk", api.LuotuoUploadBaseApk},
 	{"client/lt/checkBase", api.LuotuoCheckBase},
 	{"client/lt/upgradeBase", api.LuotuoUpgradeBase},
+	// 图标 / 背景也按壳分两套：上面那组 /api/client/{uploadIcon,…} 只动清和壳的
+	// 素材目录，骆驼壳走这四个（目录 /config/images/lt/*，URL 前缀 /lt/images、
+	// /lt/icon）。**故意不共用**的判据见 api.LuotuoUploadIcon 的注释。
+	{"client/lt/uploadIcon", api.LuotuoUploadIcon},
+	{"client/lt/uploadBj", api.LuotuoUploadBj},
+	{"client/lt/deleteIcon", api.LuotuoDeleteIcon},
+	{"client/lt/deleteBj", api.LuotuoDeleteBj},
 
 	// 公告：它保存的就是客户端启动时弹出的那条文案（显示时长、显示间隔都是
 	{"client/noticeData", api.NoticeData},

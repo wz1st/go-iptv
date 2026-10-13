@@ -122,16 +122,20 @@ func ClientData(c *gin.Context) {
 		BuildStatus: bootstrap.GetBuildStatus(),
 	}
 
-	if until.Exists("/config/images/icon/icon.png") {
-		pageData.IconUrl = "/icon/icon.png"
+	// 图标 / 背景都按**清和壳**自己的那一套取（目录与 URL 前缀同源，
+	// 见 until.ClientIconDir / ClientIconURLPrefix）。
+	if until.Exists(until.ClientIconFile(until.ShellQh)) {
+		pageData.IconUrl = until.ClientIconURLPrefix(until.ShellQh) + "icon.png"
 	}
-	pageData.BjUrl, _ = until.GetPngFileNames("/config/images/bj")
+	pageData.BjUrl, _ = until.GetPngFileNames(until.ClientBgDir(until.ShellQh))
 
 	c.JSON(200, pageData)
 }
 
-// LuotuoData 对应「骆驼壳」客户端设置页：配置项（站点地址 / 应用设置 / 提示 / 图标 /
-// 背景）与 清和壳 共用，只是编译卡片走骆驼壳自己的基底与版本（见 until.ClientLt*）。
+// LuotuoData 对应「骆驼壳」客户端设置页：站点地址 / 应用设置 / 提示与 清和壳 共用，
+// 编译卡片走骆驼壳自己的基底与版本（见 until.ClientLt*）；
+// **图标与背景是分开的两套** —— 骆驼壳有自己的目录与 URL 前缀（/lt/icon、/lt/images），
+// 与清和壳互不影响，否则在一边上传的图会同时进到两个壳的包里。
 func LuotuoData(c *gin.Context) {
 	_, ok := until.GetAuthName(c)
 	if !ok {
@@ -162,10 +166,10 @@ func LuotuoData(c *gin.Context) {
 		BuildStatus: bootstrap.GetBuildStatusLt(),
 	}
 
-	if until.Exists("/config/images/icon/icon.png") {
-		pageData.IconUrl = "/icon/icon.png"
+	if until.Exists(until.ClientIconFile(until.ShellLt)) {
+		pageData.IconUrl = until.ClientIconURLPrefix(until.ShellLt) + "icon.png"
 	}
-	pageData.BjUrl, _ = until.GetPngFileNames("/config/images/bj")
+	pageData.BjUrl, _ = until.GetPngFileNames(until.ClientBgDir(until.ShellLt))
 
 	c.JSON(200, pageData)
 }

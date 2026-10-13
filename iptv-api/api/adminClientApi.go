@@ -3,16 +3,21 @@ package api
 import (
 	"iptv-api/dto"
 	"iptv-api/service"
+	"iptv-api/until"
 
 	"github.com/gin-gonic/gin"
 )
 
 // 骆驼客户端设置（/api/client）—— 一个动作一条路由。
+//
+// 图标 / 背景**按壳分两套目录**（见 until.ClientIconDir / ClientBgDir），
+// 所以每个上传/删除动作都要带上自己的壳：这里是清和壳（until.ShellQh），
+// 骆驼壳那一组在文件下半部的 /api/client/lt/*。
 
 // ClientDeleteIcon 删除已上传的启动图标。
 // POST /api/client/deleteIcon  （无请求体）
 func ClientDeleteIcon(c *gin.Context) {
-	reply(c, service.DeleteFile(dto.ClientDeleteBjReq{}, "icon"))
+	reply(c, service.DeleteFile(dto.ClientDeleteBjReq{}, "icon", until.ShellQh))
 }
 
 // ClientDeleteBj 删除指定的一张背景图。
@@ -22,7 +27,7 @@ func ClientDeleteBj(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	reply(c, service.DeleteFile(req, "bj"))
+	reply(c, service.DeleteFile(req, "bj", until.ShellQh))
 }
 
 // ClientDecoder 设置解码方式。
@@ -77,12 +82,12 @@ func ClientTipSet(c *gin.Context) {
 
 // ClientUploadIcon 上传启动图标（multipart/form-data，字段名 iconfile）。
 func ClientUploadIcon(c *gin.Context) {
-	reply(c, service.UploadFile(c, "icon"))
+	reply(c, service.UploadFile(c, "icon", until.ShellQh))
 }
 
 // ClientUploadBj 上传背景图（multipart/form-data，字段名 bjfile）。
 func ClientUploadBj(c *gin.Context) {
-	reply(c, service.UploadFile(c, "bj"))
+	reply(c, service.UploadFile(c, "bj", until.ShellQh))
 }
 
 // BuildStatus 查询 APK 编译进度（顺带回两张卡片要的包信息）。
@@ -139,6 +144,39 @@ func LuotuoPublish(c *gin.Context) {
 // LuotuoUploadBaseApk 上传骆驼壳的编译基底 APK（multipart，字段名 apkfile）。
 func LuotuoUploadBaseApk(c *gin.Context) {
 	reply(c, service.UploadLuotuoBase(c))
+}
+
+// ---- 骆驼壳的图标 / 背景：与清和壳**各自一套目录**，不共用 --------
+//
+// 上面那四个 /api/client/{uploadIcon,uploadBj,deleteIcon,deleteBj} 只动清和壳的
+// 素材（/config/images/{icon,bj}）。骆驼壳走下面这四个（/config/images/lt/*）。
+//
+// 为什么不能让它复用上面四个：两个壳的启动页资源名不同（qh_bg / ez_bg），
+// 用户在骆驼壳后台上传的图应当只进骆驼壳的包 —— 共用的直接后果是
+// "改一个壳的图，另一个壳的包也跟着变"。
+
+// LuotuoUploadIcon 上传骆驼壳的启动图标（multipart，字段名 iconfile）。
+func LuotuoUploadIcon(c *gin.Context) {
+	reply(c, service.UploadFile(c, "icon", until.ShellLt))
+}
+
+// LuotuoUploadBj 上传骆驼壳的背景图（multipart，字段名 bjfile）。
+func LuotuoUploadBj(c *gin.Context) {
+	reply(c, service.UploadFile(c, "bj", until.ShellLt))
+}
+
+// LuotuoDeleteIcon 删除骆驼壳已上传的启动图标。
+func LuotuoDeleteIcon(c *gin.Context) {
+	reply(c, service.DeleteFile(dto.ClientDeleteBjReq{}, "icon", until.ShellLt))
+}
+
+// LuotuoDeleteBj 删除骆驼壳指定的一张背景图。
+func LuotuoDeleteBj(c *gin.Context) {
+	var req dto.ClientDeleteBjReq
+	if !bindJSON(c, &req) {
+		return
+	}
+	reply(c, service.DeleteFile(req, "bj", until.ShellLt))
 }
 
 // LuotuoCheckBase 在线检查骆驼壳编译基底的最新版本（远端 luotuo-vX.Y.Z 序列）。

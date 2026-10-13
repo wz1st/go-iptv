@@ -18,7 +18,14 @@ import (
 // 签名与「更新内容」都已写死在服务端（until.FixedAppSign / until.FixedUpdateText），
 // 请求体里带了也不采信 —— 否则等于「能调一次接口就能改签名」。
 
-func UploadFile(c *gin.Context, imgType string) dto.ReturnJsonDto {
+// UploadFile 保存上传的图标 / 背景图，**按壳落到各自的目录**（until.ClientIconDir /
+// until.ClientBgDir）。两个壳的素材互不影响，所以 shell 必须由调用方显式传进来，
+// 不从路径猜 —— 猜错的后果是"在骆驼壳后台上传的图进了清和壳的包"。
+//
+// 保存前先 MkdirAll：目录本来由安装流程创建（bootstrap.install），但**已装机的
+// 系统升级上来时不会再跑安装流程** —— 新加的骆驼壳那两套目录在存量机器上并不存在，
+// 少了这一句的表现就是"上传直接报保存失败"，而用户没有任何办法自己修。
+func UploadFile(c *gin.Context, imgType, shell string) dto.ReturnJsonDto {
 	if imgType == "icon" {
 		file, err := c.FormFile("iconfile")
 		if err != nil {
@@ -40,11 +47,16 @@ func UploadFile(c *gin.Context, imgType string) dto.ReturnJsonDto {
 			return dto.ReturnJsonDto{Code: 0, Msg: "只允许上传 PNG 文件", Type: "danger"}
 		}
 
-		dst := "/config/images/icon/icon.png"
+		if err := os.MkdirAll(until.ClientIconDir(shell), 0755); err != nil {
+			return dto.ReturnJsonDto{Code: 0, Msg: "保存文件失败:" + err.Error(), Type: "danger"}
+		}
+		dst := until.ClientIconFile(shell)
 		if err := c.SaveUploadedFile(file, dst); err != nil {
 			return dto.ReturnJsonDto{Code: 0, Msg: "保存文件失败:" + err.Error(), Type: "danger"}
 		}
-		return dto.ReturnJsonDto{Code: 1, Msg: "上传成功", Type: "success", Data: map[string]interface{}{"url": "/icon/icon.png"}}
+		// 预览地址按壳拼：两壳前缀不同（清和壳 /icon/、骆驼壳 /lt/icon/）。
+		return dto.ReturnJsonDto{Code: 1, Msg: "上传成功", Type: "success",
+			Data: map[string]interface{}{"url": until.ClientIconURLPrefix(shell) + "icon.png"}}
 	} else {
 		file, err := c.FormFile("bjfile")
 		if err != nil {
@@ -68,7 +80,10 @@ func UploadFile(c *gin.Context, imgType string) dto.ReturnJsonDto {
 
 		pngName := until.Md5(url.QueryEscape(fmt.Sprintf("%s%d", file.Filename, time.Now().Unix())))
 
-		dst := "/config/images/bj/" + pngName + ".png"
+		if err := os.MkdirAll(until.ClientBgDir(shell), 0755); err != nil {
+			return dto.ReturnJsonDto{Code: 0, Msg: "保存文件失败:" + err.Error(), Type: "danger"}
+		}
+		dst := until.ClientBgDir(shell) + "/" + pngName + ".png"
 		if err := c.SaveUploadedFile(file, dst); err != nil {
 			return dto.ReturnJsonDto{Code: 0, Msg: "保存文件失败:" + err.Error(), Type: "danger"}
 		}
@@ -76,10 +91,11 @@ func UploadFile(c *gin.Context, imgType string) dto.ReturnJsonDto {
 	}
 }
 
-func DeleteFile(req dto.ClientDeleteBjReq, imgType string) dto.ReturnJsonDto {
+// DeleteFile 删除**某个壳**的图标 / 指定背景图。壳由调用方显式传入。
+func DeleteFile(req dto.ClientDeleteBjReq, imgType, shell string) dto.ReturnJsonDto {
 	// iconFile := params.Get("iconfile")
 	if imgType == "icon" {
-		iconFile := "/config/images/icon/icon.png"
+		iconFile := until.ClientIconFile(shell)
 		if err := os.Remove(iconFile); err != nil {
 			return dto.ReturnJsonDto{Code: 0, Msg: "删除失败:" + err.Error(), Type: "danger"}
 		}
@@ -89,7 +105,7 @@ func DeleteFile(req dto.ClientDeleteBjReq, imgType string) dto.ReturnJsonDto {
 	if !until.IsSafeImgName(bjName) {
 		return dto.ReturnJsonDto{Code: 0, Msg: "文件名不合法", Type: "danger"}
 	}
-	bjFile := "/config/images/bj/" + bjName + ".png"
+	bjFile := until.ClientBgDir(shell) + "/" + bjName + ".png"
 	if err := os.Remove(bjFile); err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "删除失败", Type: "danger"}
 	}

@@ -13,8 +13,10 @@ import (
 	"time"
 )
 
-// clientBgDir 是上传的启动背景图目录；编译期会挑其中一张打进包内。
-const clientBgDir = "/config/images/bj"
+// 上传素材（图标 / 启动背景）的目录**不在这里定义**：两个壳各有一套，口径统一
+// 在 until.ClientIconDir / until.ClientBgDir（连同对外 URL 前缀与包内资源名）。
+// 曾经这里是单个 `const clientBgDir = "/config/images/bj"`，被两个壳共用 ——
+// 那正是「上传的背景图同时进了两个壳」的根因。
 
 // 两个壳各有一份**独立**的编译状态。
 //
@@ -103,8 +105,10 @@ func BuildAPK(staged bool) bool {
 		Version:     buildNo,
 		VersionName: until.FormatClientVersion(base, buildNo),
 		// 没上传 logo / 背景时传空串，编译侧就保留包内默认图。
-		IconPath:       clientIconPath(),
-		BackgroundPath: clientBackgroundPath(),
+		// 素材目录与包内资源名都按**清和壳**取 —— 与骆驼壳各一套。
+		IconPath:       clientIconPath(until.ShellQh),
+		BackgroundPath: clientBackgroundPath(until.ShellQh),
+		BgDrawable:     until.ClientBgDrawable(until.ShellQh),
 	}
 
 	err := until.BuildClientApk(baseApk, apkPath, workDir, values)
@@ -165,8 +169,12 @@ func BuildLuotuoAPK(staged bool) bool {
 		AppName:        cfg.BuildLt.Name,
 		Version:        buildNo,
 		VersionName:    until.FormatClientVersion(base, buildNo),
-		IconPath:       clientIconPath(),
-		BackgroundPath: clientBackgroundPath(),
+		IconPath:       clientIconPath(until.ShellLt),
+		BackgroundPath: clientBackgroundPath(until.ShellLt),
+		// 背景资源名是**按壳分**的：骆驼壳基底里叫 ez_bg，没有清和壳那个 qh_bg。
+		// 写成同一个名字的后果不是"图不对"，而是 overlayImage 找不到同名文件
+		// 直接报错 ⇒ 只要后台上传过背景图，骆驼壳就再也编不出来。
+		BgDrawable: until.ClientBgDrawable(until.ShellLt),
 		// 骆驼壳（ez 壳）的地址写在 smali 的 const-string 里，不是 string 资源 ——
 		// 基底里根本没有 qhtv_server_host / qhtv_version_name 两个键。
 		HostInSmali: true,
@@ -225,25 +233,29 @@ func clientApkHostLt(serverURL string) string {
 	return clientApkHost(trimmed) + "/lt"
 }
 
-// clientIconPath 返回上传的 logo；没上传返回空串（保留包内默认图）。
-func clientIconPath() string {
-	p := "/config/images/icon/icon.png"
+// clientIconPath 返回某个壳上传的 logo；没上传返回空串（保留包内默认图）。
+func clientIconPath(shell string) string {
+	p := until.ClientIconFile(shell)
 	if !until.Exists(p) {
 		return ""
 	}
 	return p
 }
 
-// clientBackgroundPath 返回要打进包的启动背景；没上传返回空串。
+// clientBackgroundPath 返回某个壳要打进包的启动背景；没上传返回空串。
 //
-// 刻意**不**在这里随机挑图（until.GetBg 会随机）：
+// **按壳取目录**：两个壳的背景图池是分开的（until.ClientBgDir），这里只读自己
+// 那一份 —— 否则用户在清和壳上传的图会出现在骆驼壳的包里。
+//
+// 刻意**不**在这里随机挑图（运行期下发背景走 service.GetBg 的随机策略）：
 // 打进包里的那张必须是稳定的一张，否则同一版 APK 在不同机器上 logo/背景不一致，
 // 用户会当成"发了不同的版本"。
-func clientBackgroundPath() string {
-	if !until.Exists(clientBgDir) {
+func clientBackgroundPath(shell string) string {
+	dir := until.ClientBgDir(shell)
+	if !until.Exists(dir) {
 		return ""
 	}
-	picks, err := filepath.Glob(filepath.Join(clientBgDir, "*.png"))
+	picks, err := filepath.Glob(filepath.Join(dir, "*.png"))
 	if err != nil || len(picks) == 0 {
 		return ""
 	}

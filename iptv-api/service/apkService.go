@@ -68,9 +68,13 @@ func GetverLt(base string) dto.GetverRes {
 	return res
 }
 
-func GetBg() string {
+// GetBg 从**某个壳**的背景图池里随机挑一张，只返回文件名（不含路径）。
+//
+// 按壳取目录是必须的：两个壳的图池各自独立（until.ClientBgDir）——
+// 共用一份的后果是"在清和壳后台上传的图，骆驼壳客户端也会拿到"。
+func GetBg(shell string) string {
 	// 获取指定目录下的所有png文件
-	dir := "/config/images/bj"
+	dir := until.ClientBgDir(shell)
 	files, err := filepath.Glob(filepath.Join(dir, "*.png"))
 	if err != nil {
 		return ""

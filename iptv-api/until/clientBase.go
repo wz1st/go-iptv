@@ -118,6 +118,102 @@ const (
 	ShellLt = "lt" // 骆驼壳：基底 client/Client_lt.apk（包名 cn.dsmtv.player）
 )
 
+// ============================================================================
+// 按壳分叉的「启动图素材」口径：上传目录 / 对外 URL 前缀 / 包内资源名
+//
+// 三样东西必须**成套**，而且必须按壳分。历史上有两处踩过：
+//
+//  1. 目录与 URL 只改一边 —— 后台上传成功但预览是裂图（或反过来：包里换了图，
+//     后台还显示旧图）。
+//  2. 包内资源名两壳写死成同一个 —— 见下。
+//
+// 包内资源名**不是**内部命名，是与各壳源码的逐字契约：
+//   - 清和壳（Kotlin 壳，源码 iptv-apk-rebuilt）SplashScreen.kt 读
+//     R.drawable.icon 与 R.drawable.qh_bg（旧 camel 命名 ez_bg 已改名）；
+//   - 骆驼壳（ez 壳）的启动背景是 styles.xml 里 android:windowBackground 指到的
+//     @drawable/ez_bg，图标同样叫 icon。它的基底里**根本没有 qh_bg**。
+//
+// 而 until/clientBuild.go 的 overlayImage **只覆盖已存在的同名文件**，名字对不上
+// 时返回错误 ⇒ 早期两壳共用 "qh_bg" 的写法，症状是「只要后台上传过一张背景图，
+// 骆驼壳就再也编不出来」（报错说基底里找不到 qh_bg.png，而那不是用户能理解的话）。
+// 所以背景资源名必须按壳取。
+// ============================================================================
+
+// 两壳包内的启动图资源名。
+const (
+	clientIconDrawable = "icon"  // 图标：两壳同名
+	clientQhBgDrawable = "qh_bg" // 清和壳启动背景
+	clientLtBgDrawable = "ez_bg" // 骆驼壳启动背景（ez 壳的既有命名，不改）
+)
+
+// ClientIconDrawable 返回某个壳包内要被替换掉的图标资源名。
+func ClientIconDrawable(_ string) string { return clientIconDrawable }
+
+// ClientBgDrawable 返回某个壳包内要被替换掉的启动背景资源名。
+func ClientBgDrawable(shell string) string {
+	if shell == ShellLt {
+		return clientLtBgDrawable
+	}
+	return clientQhBgDrawable
+}
+
+// 两壳各自的上传素材目录（持久卷 /config 下）。
+//
+// 清和壳刻意**留在历史路径**（/config/images 根）：线上已经有人传过图，换目录
+// 等于把用户已上传的素材丢掉；骆驼壳是新增的壳，没有历史包袱，整棵子树独立放在
+// /config/images/lt 下 —— 这就是「两个壳不共用同一套」的落点。
+const (
+	clientIconDirQh = "/config/images/icon"
+	clientBgDirQh   = "/config/images/bj"
+	clientIconDirLt = "/config/images/lt/icon"
+	clientBgDirLt   = "/config/images/lt/bj"
+
+	// URL 前缀与目录一一对应：清和壳 /icon/ 与 /images/，骆驼壳 /lt/icon/ 与
+	// /lt/images/。骆驼壳**不能**用 /images/lt/ ——那样它落在清和壳的 alias
+	// （/images/ → /config/images/bj）底下，实际会去取
+	// /config/images/bj/lt/xxx.png，正好是那份「目录与 URL 只改一边」的裂图。
+	clientIconURLQh = "/icon/"
+	clientBgURLQh   = "/images/"
+	clientIconURLLt = "/lt/icon/"
+	clientBgURLLt   = "/lt/images/"
+)
+
+// ClientIconDir / ClientBgDir 返回某个壳的图标目录 / 背景图池目录（持久卷路径）。
+func ClientIconDir(shell string) string {
+	if shell == ShellLt {
+		return clientIconDirLt
+	}
+	return clientIconDirQh
+}
+
+func ClientBgDir(shell string) string {
+	if shell == ShellLt {
+		return clientBgDirLt
+	}
+	return clientBgDirQh
+}
+
+// ClientIconURLPrefix / ClientBgURLPrefix 是上面两个目录的对外 URL 前缀
+// （静态路由与 nginx alias 都按它挂，见 router.go 与 nginx/site.inc）。
+func ClientIconURLPrefix(shell string) string {
+	if shell == ShellLt {
+		return clientIconURLLt
+	}
+	return clientIconURLQh
+}
+
+func ClientBgURLPrefix(shell string) string {
+	if shell == ShellLt {
+		return clientBgURLLt
+	}
+	return clientBgURLQh
+}
+
+// ClientIconFile 是某个壳的图标文件在持久卷里的完整路径（上传落点）。
+func ClientIconFile(shell string) string {
+	return ClientIconDir(shell) + "/icon.png"
+}
+
 // ClientApkFileName 是产物的**落盘文件名**（也是 /app 静态目录下的对外文件名）：
 // `<应用名>-<壳>.apk`，待发布包为 `<应用名>-<壳>-new.apk`。
 func ClientApkFileName(name, shell string, staged bool) string {

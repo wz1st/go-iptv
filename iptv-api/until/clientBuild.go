@@ -53,6 +53,14 @@ type ClientBuildValues struct {
 	IconPath string
 	// BackgroundPath 是上传的启动背景；为空时保留包内默认图。
 	BackgroundPath string
+	// BgDrawable 是**包内**要被 BackgroundPath 覆盖掉的资源名 —— 两个壳不同
+	// （清和壳 qh_bg、骆驼壳 ez_bg），所以必须由调用方按壳传进来，不能在这里写死。
+	// 取 until.ClientBgDrawable(shell)。
+	//
+	// BackgroundPath 非空而本字段为空时，编译会**当场失败**而不是静默跳过：
+	// overlayImage 用的是"只覆盖已存在的同名文件"策略，名字缺失的后果是
+	// 「上传了图、包里没换」，那类问题只能靠用户投诉才发现。
+	BgDrawable string
 	// HostInSmali 说明这份基底的服务端地址**不在 string 资源里**，
 	// 而在 smali 的 const-string 字面量里（骆驼壳 = ez 壳就属于这种）。
 	//
@@ -358,10 +366,11 @@ func xmlEscape(s string) string {
 
 // applyClientImages 用上传的图覆盖包内默认图；没上传就保留默认图。
 //
-// 目标资源名是**对外契约**（客户端 tv/src/main/java/.../ui/splash/SplashScreen.kt
-// 读 R.drawable.icon 与 R.drawable.qh_bg）：
-//   - logo     res/drawable*/icon.png
-//   - 启动背景  res/drawable*/qh_bg.png
+// 目标资源名是**按壳分**的契约（见 ClientBuildValues.BgDrawable）：
+//   - logo     res/drawable*/icon.png     （两壳同名）
+//   - 启动背景  res/drawable*/<BgDrawable>.png
+//     清和壳 qh_bg（SplashScreen.kt 读 R.drawable.qh_bg），
+//     骆驼壳 ez_bg（styles.xml 的 android:windowBackground）。
 //
 // 注意**只覆盖 drawable 目录下的同名文件**，不碰 mipmap-* / drawable-anydpi-*：
 // anydpi 桶里的同名资源优先级最高，覆盖它反而会在部分设备上不生效。
@@ -369,13 +378,19 @@ func xmlEscape(s string) string {
 // **没上传时不复制任何东西** —— 这正是"未上传则用当前默认图"的实现方式，
 // 不要为了"统一"而无脑复制包内文件，那只会平白产生一次 IO。
 func applyClientImages(workDir string, v ClientBuildValues) error {
-	if err := overlayImage(workDir, "icon", v.IconPath); err != nil {
+	if err := overlayImage(workDir, clientIconDrawable, v.IconPath); err != nil {
 		return err
 	}
-	if err := overlayImage(workDir, "qh_bg", v.BackgroundPath); err != nil {
-		return err
+	if strings.TrimSpace(v.BackgroundPath) == "" {
+		return nil
 	}
-	return nil
+	if strings.TrimSpace(v.BgDrawable) == "" {
+		return fmt.Errorf(
+			"编译参数缺少启动背景资源名（ClientBuildValues.BgDrawable）——" +
+				"两个壳的背景资源名不同（清和壳 qh_bg / 骆驼壳 ez_bg），" +
+				"必须由调用方按壳传；传空会让上传的背景图无处可放")
+	}
+	return overlayImage(workDir, v.BgDrawable, v.BackgroundPath)
 }
 
 // overlayImage 把一张图覆盖到 res 下所有 drawable 桶的 <name>.png。

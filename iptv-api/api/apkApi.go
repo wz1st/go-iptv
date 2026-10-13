@@ -109,13 +109,24 @@ func Getver(c *gin.Context) {
 }
 
 func GetBg(c *gin.Context) {
-	imgName := service.GetBg()
+	// 背景图池按壳分（清和壳 /config/images/bj、骆驼壳 /config/images/lt/bj），
+	// 分流判据与登录/getver 完全一致（见 isLuotuoShell）—— 骆驼壳的 SplashActivity
+	// 会拿这个地址下载启动背景并缓存成 filesDir/ez_bg.png。
+	shell := until.ShellQh
+	if isLuotuoShell(c) {
+		shell = until.ShellLt
+	}
+	imgName := service.GetBg(shell)
 	if imgName == "" {
 		c.String(http.StatusOK, "")
 		return
 	}
+	// 前缀按壳取，且**不再**拼 "/images/bj/"：/images/ 的 alias 已经指向 bj 目录
+	// 本身，多一层是 /config/images/bj/bj/xxx.png —— 404，而客户端把取图失败
+	// 静默吞掉，表现只是"背景一直是包内默认图"，极难定位。
+	//
 	// 同 ApkLogin：按请求基址拼，站点上 HTTPS 后不给客户端发明文地址。
-	c.String(http.StatusOK, adminBase(c)+"/images/bj/"+imgName)
+	c.String(http.StatusOK, adminBase(c)+until.ClientBgURLPrefix(shell)+imgName)
 }
 
 func GetChannels(c *gin.Context) {

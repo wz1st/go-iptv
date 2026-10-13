@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"log"
 	"math"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -418,24 +417,9 @@ func GetContainerID() (string, error) {
 	return id, nil
 }
 
-func GetBg() string {
-	// 获取指定目录下的所有png文件
-	dir := "/config/images/bj"
-	files, err := filepath.Glob(filepath.Join(dir, "*.png"))
-	if err != nil {
-		return ""
-	}
-	if len(files) == 0 {
-		return ""
-	}
-
-	pngs := make([]string, len(files))
-	for i, file := range files {
-		pngs[i] = filepath.Base(file)
-	}
-	randomIndex := rand.Intn(len(pngs))
-	return pngs[randomIndex]
-}
+// GetBg 已经删除：它是 service.GetBg 的第二份实现，且目录写死 /config/images/bj。
+// 两壳的背景图池分开之后，留一份"按固定目录随机取图"的实现只会成为下一个口径
+// 分叉点 —— 唯一入口是 service.GetBg(shell)。
 
 func CheckLogo(path string) (bool, error) {
 	// 检查路径是否存在
