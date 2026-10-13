@@ -5,7 +5,6 @@ import (
 	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
-	"iptv-api/bootstrap"
 	"iptv-api/dao"
 	"iptv-api/dto"
 	"iptv-api/models"
@@ -41,20 +40,20 @@ func Getver(base string) dto.GetverRes {
 	res.AppVer = until.FormatClientVersion(until.ClientPublishedBase(), cfg.Build.Version)
 	res.UpSets = cfg.App.Update.Set
 	res.UpText = until.FixedUpdateText
-	res.AppURL = base + "/app/" + cfg.Build.Name + ".apk"
+	res.AppURL = base + until.ClientApkURL(cfg.Build.Name, false)
 	// 路径必须是**线上包的真实落点** `/config/app/...`。
 	// 原来写的是相对路径 `./app/...`，运行目录是 `/app` 而包在持久卷 `/config/app/`，
 	// os.Stat 必然失败 ⇒ GetFileSize 恒返回 "0 MB"，客户端更新弹窗里的包大小一直是 0。
-	res.UpSize = until.GetFileSize(bootstrap.OfficialAPKPath(cfg.Build.Name))
+	// 这正是 SiteIndexData 用来判断"APK 是否存在"的同一个判据（!= "0 MB"）。
+	res.UpSize = until.GetFileSize(until.ClientApkPath(cfg.Build.Name, false))
 	return res
 }
 
 // GetverLt 取「骆驼壳」客户端版本信息。口径与 Getver 完全一致，只是基底取
-// ClientPublishedLtBase、版本号拼 cfg.BuildLt、下载地址指向 /app/Client_lt.apk。
+// ClientPublishedLtBase、版本号拼 cfg.BuildLt、下载地址指向骆驼壳自己那个包。
 //
-// 骆驼壳 apk 的基址被编成 `<站点>/apk/lt`，因此它请求的是 /apk/lt/getver
-// （老包带 `?shell=lt`）—— api 层按路由分流到本函数（见 api.isLuotuoShell），
-// 两个壳共用同一个 Getver 入口，只是各自取自己的基底与版本号。
+// 骆驼壳 apk 在 getver 请求里带 `?shell=lt`（见 client/smali g$3.smali 的改写），
+// api 层据此路由到本函数 —— 两套壳共用同一个 Getver 入口，只按 shell 分流。
 func GetverLt(base string) dto.GetverRes {
 	var res dto.GetverRes
 
@@ -64,14 +63,18 @@ func GetverLt(base string) dto.GetverRes {
 	res.AppVer = until.FormatClientVersion(until.ClientPublishedLtBase(), cfg.BuildLt.Version)
 	res.UpSets = cfg.App.Update.Set
 	res.UpText = until.FixedUpdateText
-	res.AppURL = base + "/app/" + cfg.BuildLt.Name + ".apk"
-	res.UpSize = until.GetFileSize(bootstrap.OfficialAPKPath(cfg.BuildLt.Name))
+	res.AppURL = base + until.ClientLtApkURL(cfg.BuildLt.Name, false)
+	res.UpSize = until.GetFileSize(until.ClientLtApkPath(cfg.BuildLt.Name, false))
 	return res
 }
 
-func GetBg() string {
+// GetBg 从**某个壳**的背景图池里随机挑一张，只返回文件名（不含路径）。
+//
+// 按壳取目录是必须的：两个壳的图池各自独立（until.ClientBgDir）——
+// 共用一份的后果是"在清和壳后台上传的图，骆驼壳客户端也会拿到"。
+func GetBg(shell string) string {
 	// 获取指定目录下的所有png文件
-	dir := "/config/images/bj"
+	dir := until.ClientBgDir(shell)
 	files, err := filepath.Glob(filepath.Join(dir, "*.png"))
 	if err != nil {
 		return ""
@@ -105,6 +108,9 @@ func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
 	base = publicBase(base, cfg.ServerUrl)
 
 	result.IP = user.IP
+	// 账号以 json 字符串下发。客户端 `ServerConfig.accountId` 声明为 String，
+	// 这里若下发数字会触发 kotlinx 的宽松解析（能读但会留字符串原文的坑），
+	// 两边统一成字符串。
 	result.ID = user.Name
 	result.Status = user.Status
 	result.NetType = user.NetType
@@ -120,10 +126,8 @@ func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
 	result.BuffTimeOut = cfg.App.BuffTimeout
 	result.TipLoading = cfg.Tips.Loading
 	result.DataURL = base + "/apk/channels"
-	result.AppURL = base + "/app/" + cfg.Build.Name + ".apk"
+	result.AppURL = base + until.ClientApkURL(cfg.Build.Name, false)
 	result.ShowTime = cfg.Ad.ShowTime
-	// accountId 已改为字符串下发（dto.LoginRes.ID 是 string，见那里的大小写混写说明），
-	// 这里跟着去掉 strconv.FormatInt —— 拼接结果与旧的 FormatInt 逐字相同。
 	result.TipUserNoReg = "当前账号 " + user.Name + " " + cfg.Tips.UserNoReg
 	result.TipUserExpired = "当前账号 " + user.Name + " " + cfg.Tips.UserExpired
 	result.TipUserForbidden = "当前账号 " + user.Name + " " + cfg.Tips.UserForbidden
@@ -135,14 +139,50 @@ func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
 	// 所以存量设备换到新二进制后仍能解开自己那份数据 —— 这条不能动。
 	result.RandKey = until.Md5(time.Now().Format("20060102150405") + user.Name)
 	// 剩余天数：骆驼壳据此判到期（见 dto.LoginRes.Exp 的注释）。
-	// 缺失时客户端 optInt("exp") 返回 0 ⇒ 所有骆驼壳用户被判"账号已到期"。
 	result.Exp = until.ExpireDaysLeft(user.ExpireTime)
 
 	return getUserInfo(user, result)
 }
 
+// IsLuotuoAppName 判断客户端上报的应用显示名是不是**骆驼壳**的。
+//
+// 应用名是登录密钥派生公式的输入之一（until.AesKeyOf 的 E），而服务端把
+// cfg.BuildLt.Name 注入进骆驼壳包（bootstrap.BuildLuotuoAPK 的 AppName），
+// 所以两者恒等 —— 只要用户没把两个壳的应用名配成同一个（那本来也无法区分）。
+func IsLuotuoAppName(appName string) bool {
+	name := strings.TrimSpace(appName)
+	if name == "" {
+		return false
+	}
+	return name == dao.GetConfig().BuildLt.Name
+}
+
 // GetChannels 取 APK 客户端的频道列表。
-func GetChannels(channel dto.DataReqDto, base string) string {
+//
+// lt 为 true 时用**骆驼壳**的密钥加密载荷：两个壳的应用名与包名都不同，密钥
+// 随之不同（until.GetAesKey / GetAesKeyLt），客户端各用自己那份去解。用错一边
+// 的表现是「登录正常、频道列表永远空」—— 解密失败不会报错，只是解出乱码。
+//
+// 本轮恢复了预置的「我的收藏」分组占位。它此前被当成"收藏功能的入口"整块删掉，
+// 但它其实**兼任两件事**，删掉它会让客户端整个分组表错位：
+//
+//  1. 它是**索引锚点**。真实分组拿的 ID 是 `v.Sort + 3`（≥3），占位分组 ID 为 0，
+//     下面按 ID 升序排 ⇒ 占位组永远落在下标 0，真实分组从下标 1 起。删掉它，
+//     真实分组的整体下标**左移一位**；而客户端把"在看哪个分组"按下标持久化
+//     （`PlayerActivity.d`），一旦存的是 1 而列表只剩 1 项，取分组就越界。
+//  2. 它是**长度填充**。`Tmp` 里那句说明（base64）自己写明了：客户端解码要
+//     先砍掉载荷前面 128 字符的头，载荷太短凑不满，连够长的正常列表都解不开。
+//
+// 放回它正是为了验证"骆驼壳分组在、频道栏空白、不起播"是否由当初删掉它引起。
+// 若确认，隐藏收藏应改用"保留该组、只改展示"的办法，而不是把这一组从下发数据里拿掉。
+func GetChannels(channel dto.DataReqDto, base string, lt bool) string {
+	// 载荷密钥：按壳取。放在最前面算一次，两条返回路径（"该套餐无频道"与正常列表）
+	// 都用同一把 —— 漏改任一条，那种情况下的客户端就永远解不开。
+	appKey := until.GetAesKey()
+	if lt {
+		appKey = until.GetAesKeyLt()
+	}
+
 	resList := []dto.ChannelListDto{{
 		Name: "我的收藏",
 		Data: []dto.ChannelData{},
@@ -178,20 +218,35 @@ func GetChannels(channel dto.DataReqDto, base string) string {
 
 		jsonData, _ := json.Marshal(resList)
 		jsonStr := until.DecodeUnicode(string(jsonData))
-		return encrypt(jsonStr, channel.Rand)
+		return encrypt(jsonStr, channel.Rand, appKey)
 	}
 
 	var categoryList []models.IptvCategory
 	dao.DB.Model(&models.IptvCategory{}).Where("id in ? and enable = ?", cList, 1).Order("sort asc").Find(&categoryList)
 
 	cfg := dao.GetConfig()
+	// 台标是**相对路径**（/logo/xxx.png，见 until.EpgNameGetLogo），
+	// 客户端拿不到就直接显示不出来，所以这里补成绝对地址。
+	// base 只在能识别出合法 Host 时才有效，取不到时回落到配置的 ServerUrl ——
+	// 与 adminBase 同口径，避免反代/裸 IP 场景下台标整批失效。
+	logoBase := base
+	if logoBase == "" {
+		logoBase = strings.TrimRight(cfg.ServerUrl, "/")
+	}
 	for _, v := range categoryList {
 		var tmpData []dto.ChannelData
 		var i int64 = 1
 		var dataMap = make(map[string][]string)
+		var logoMap = make(map[string]string)
 		var tmpMap = make(map[string]int64)
 
 		for _, channel := range until.CaGetChannels(v, false, base) {
+			// 同一频道名的多条线路共用一份台标，取第一条非空的。
+			// 之所以按名字而不是按线路存：dataMap 本来就是按名字聚合的，
+			// 台标跟着名字走才不会在多线路频道上丢图。
+			if cur := logoMap[channel.Name]; cur == "" && channel.Logo != "" {
+				logoMap[channel.Name] = logoBase + channel.Logo
+			}
 			if v.Proxy && cfg.Proxy.Status == 1 && strings.TrimSpace(channel.PUrl) != "" {
 				dataMap[channel.Name] = append(dataMap[channel.Name], strings.TrimSpace(channel.PUrl))
 				if _, ok := tmpMap[channel.Name]; !ok {
@@ -212,6 +267,7 @@ func GetChannels(channel dto.DataReqDto, base string) string {
 				Num:    v1,
 				Name:   k,
 				Source: dataMap[k],
+				Logo:   logoMap[k],
 			})
 		}
 
@@ -234,15 +290,20 @@ func GetChannels(channel dto.DataReqDto, base string) string {
 	jsonData, _ := json.Marshal(resList)
 	jsonStr := until.DecodeUnicode(string(jsonData))
 
-	return encrypt(jsonStr, channel.Rand)
+	return encrypt(jsonStr, channel.Rand, appKey)
 }
 
-func encrypt(str string, randkey string) string {
+// encrypt 把频道 JSON 编成客户端能解的载荷。
+//
+// appKey 是**调用方那个壳的登录密钥**（until.GetAesKey / GetAesKeyLt），由调用处
+// 按壳选好传进来 —— 早先这里自己读 until.GetAesKey()，于是骆驼壳拿到的载荷是用
+// 清和壳的密钥加的，客户端按自己的 F 去解只能得到乱码（表现为"频道列表为空"）。
+func encrypt(str string, randkey string, appKey string) string {
 	encoded, _ := CompressString(str)
 
 	// Step 2: MD5 加密 key
 
-	hashedKey := until.Md5(until.GetAesKey() + randkey)
+	hashedKey := until.Md5(appKey + randkey)
 
 	// Step 3: 截取 hashedKey 的一部分
 	subKey := hashedKey[7:23]
@@ -305,12 +366,12 @@ func getUserInfo(user models.IptvUser, result dto.LoginRes) dto.LoginRes {
 
 	if cfg.App.NeedAuthor == 0 {
 		result = getMealName(user, result)
-		log.Printf("用户: %d 登录成功,IP: %s 设备ID: %s 套餐: %s \n", result.ID, result.IP, user.DeviceID, result.MealName)
+		log.Printf("用户: %s 登录成功,IP: %s 设备ID: %s 套餐: %s \n", result.ID, result.IP, user.DeviceID, result.MealName)
 	} else if cfg.App.NeedAuthor == 1 && user.Status != -1 {
 		result = getMealName(user, result)
-		log.Printf("用户: %d 登录成功,IP: %s 设备ID: %s 套餐: %s\n", result.ID, result.IP, user.DeviceID, result.MealName)
+		log.Printf("用户: %s 登录成功,IP: %s 设备ID: %s 套餐: %s\n", result.ID, result.IP, user.DeviceID, result.MealName)
 	} else {
-		log.Printf("用户: %d 登录成功,IP: %s 设备ID: %s 未授权 \n", result.ID, result.IP, user.DeviceID)
+		log.Printf("用户: %s 登录成功,IP: %s 设备ID: %s 未授权 \n", result.ID, result.IP, user.DeviceID)
 	}
 
 	// 套餐名再以 `meal` 下发一份：客户端 SplashActivity 读的是这个名
@@ -387,7 +448,7 @@ func AddUser(user dto.ApkUser, ip string) models.IptvUser {
 	var cfg = dao.GetConfig()
 
 	dbData := models.IptvUser{
-		Name:     int64(genName()),
+		Name:     genName(user),
 		Mac:      user.Mac,
 		DeviceID: user.DeviceID,
 		Model:    user.Model,
@@ -412,17 +473,47 @@ func AddUser(user dto.ApkUser, ip string) models.IptvUser {
 	return dbData
 }
 
-func genName() int {
-	name := rand.Intn(999999-1000+1) + 1000 // 生成 1000~999999 之间的随机数
-	var count int64
-	err := dao.DB.Model(&models.IptvUser{}).Where("name = ?", name).Count(&count).Error
-	if err != nil {
-		panic(err)
+// genName 生成设备账号。
+//
+// 客户端上报 `androidid`（真设备 ID）后，账号就用它 —— 用户在后台一眼能认出
+// 「这个账号就是这台机器」，不再是一串无从对应的随机数。
+//
+// 两点必须注意：
+//  1. 取不到设备 ID（客户端老版本、或 ANDROID_ID 取不到）时退回旧的随机数，
+//     登录不因此失败。
+//  2. 随机数分支的递归在极端碰撞下会栈溢出（1000~999999 空间、约 90 万条
+//     数据时生日碰撞已不罕见）。改为循环 + 上限，撞满就线性探测。
+func genName(user dto.ApkUser) string {
+	if id := strings.TrimSpace(user.DeviceID); id != "" {
+		return id
 	}
+	return randomName()
+}
 
-	if count == 0 {
-		return name
-	} else {
-		return genName() // 递归调用
+func randomName() string {
+	// 线性探测：先随机若干次，仍撞名就顺序往后找，不再无限递归。
+	for i := 0; i < 32; i++ {
+		name := int64(rand.Intn(999999-1000+1) + 1000) // 1000~999999
+		var count int64
+		if err := dao.DB.Model(&models.IptvUser{}).Where("name = ?", strconv.FormatInt(name, 10)).Count(&count).Error; err != nil {
+			// 查库失败时不能当"没撞名"——那会写出重复账号。这里保守地当成撞名，继续探测。
+			log.Println("genName 查询账号占用失败: " + err.Error())
+			continue
+		}
+		if count == 0 {
+			return strconv.FormatInt(name, 10)
+		}
 	}
+	// 32 次随机都没空位，说明号码空间快满了，顺序找一个。
+	for name := int64(1000); name < 999999; name++ {
+		var count int64
+		if err := dao.DB.Model(&models.IptvUser{}).Where("name = ?", strconv.FormatInt(name, 10)).Count(&count).Error; err != nil {
+			log.Println("genName 顺序探测失败: " + err.Error())
+			return strconv.FormatInt(name, 10)
+		}
+		if count == 0 {
+			return strconv.FormatInt(name, 10)
+		}
+	}
+	return strconv.FormatInt(int64(rand.Intn(999999-1000+1)+1000), 10)
 }
