@@ -134,6 +134,48 @@ func ClientData(c *gin.Context) {
 	c.JSON(200, pageData)
 }
 
+// LuotuoData 对应「骆驼壳」客户端设置页：配置项（站点地址 / 应用设置 / 提示 / 图标 /
+// 背景）与 清和壳 共用，只是编译卡片走骆驼壳自己的基底与版本（见 until.ClientLt*）。
+func LuotuoData(c *gin.Context) {
+	_, ok := until.GetAuthName(c)
+	if !ok {
+		c.JSON(200, dto.NewAdminRedirectDto())
+		return
+	}
+	cfg := dao.GetConfig()
+
+	official := bootstrap.OfficialAPKPath(cfg.BuildLt.Name)
+	staged := bootstrap.StagedAPKPath(cfg.BuildLt.Name)
+
+	pageData := dto.AdminClientDto{
+		Title:       "骆驼壳客户端设置",
+		ServerUrl:   cfg.ServerUrl,
+		Build:       cfg.BuildLt,
+		App:         cfg.App,
+		Tips:        cfg.Tips,
+		ApkUrl:      "/app/" + cfg.BuildLt.Name + ".apk",
+		ApkName:     bootstrap.APKDownloadName(cfg.BuildLt.Name, cfg.BuildLt.Version),
+		UpSize:      until.GetFileSize(official),
+		ApkMd5:      until.Md5File(official),
+		NewVersion:  cfg.BuildLt.NewVersion,
+		NewSize:     until.GetFileSize(staged),
+		NewMd5:      until.Md5File(staged),
+		NewApkUrl:   "/app/" + cfg.BuildLt.Name + "-new.apk",
+		NewApkName:  bootstrap.APKDownloadName(cfg.BuildLt.Name, cfg.BuildLt.NewVersion),
+		NewExists:   until.Exists(staged),
+		BuildStatus: bootstrap.GetBuildStatus(),
+	}
+
+	if until.Exists("/config/images/icon/icon.png") {
+		pageData.IconUrl = "/icon/icon.png"
+	}
+	pageData.BjUrl, _ = until.GetPngFileNames("/config/images/bj")
+	// 广告内容与壳无关（它是全局配置），两个壳的设置页都要能看到同一份值。
+	pageData.AdInfo = service.AdInfo()
+
+	c.JSON(200, pageData)
+}
+
 // ClientMyTVData 对应 html.ClientMyTV。
 func ClientMyTVData(c *gin.Context) {
 	_, ok := until.GetAuthName(c)

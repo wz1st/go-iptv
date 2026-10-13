@@ -1,6 +1,7 @@
 package until
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,17 +17,22 @@ import (
 // 直接跑 apktool。少一跳 WS 就少一处会静默失败的中间环节 —— 引擎那边
 // "收到了但没执行"的表现是前端一直转圈，而这里 exec 的错误当场就到手。
 //
-// ## 改写的三个值都是「string 资源」而不是「smali 常量」
+// ## 改写点：清和壳走 string 资源，骆驼壳的地址只能在 smali 上改
 //
-// 服务端链接、应用名、版本号在 apk 源码侧是 Gradle 注入的 string 资源
-// （见 iptv-apk-rebuilt/core/data/build.gradle.kts 的 resValue）。
-// 它们在解包后就是 `res/values/strings.xml` 里的三行明文 ——
-// 改它们不需要理解 smali，也不需要在 dex 里做偏移重排。
+// 清和壳（Kotlin 壳）的服务端链接、应用名、版本号在源码侧是 Gradle 注入的
+// string 资源（见 iptv-apk-rebuilt/core/data/build.gradle.kts 的 resValue）。
+// 解包后就是 `res/values/strings.xml` 里的三行明文 —— 改它们不需要理解 smali，
+// 也不需要在 dex 里做偏移重排。
+//
+// 骆驼壳（ez 壳，来源 client/ 的 apktool 解包树）不同：它只有 `app_name` 是
+// string 资源，地址是 SplashActivity 的 const-string 字面量。所以对它**必须**
+// 改 smali（见 patchClientHostInSmali）。这是无法回避的 —— 该基底里根本没有
+// qhtv_server_host 这个键。
 //
 // 早先的实现是把 `client/`（一整棵 apktool 解包树，含几千个 smali）烤进镜像，
-// 再用正则去改 smali 里的 `const-string v0, "xxx/iptv"` 与 `const/16 v0, 0x301b`。
-// 那种做法对 apktool 版本与 smali 结构敏感：apk 一重编译，指令挪个位置
-// 正则就悄悄匹配不上，编译照过、功能不对。现已改为「基包是编译好的 APK」。
+// 再用正则去改 smali 里的 `const-string v0, "xxx/iptv"` 与 `const/16 v0, 0x301b`，
+// 且**不判命中数**：正则匹配不上时编译照过、包指向写死的地址。
+// 现在两套壳都改成「基包是编译好的 APK」，且任何替换都必须命中才放行。
 
 // 三个注入值的资源键名 —— 与 iptv-apk-rebuilt 的 core/data/build.gradle.kts
 // 逐字对应。服务端按**键名**找，不按字面量猜。
@@ -47,6 +53,18 @@ type ClientBuildValues struct {
 	IconPath string
 	// BackgroundPath 是上传的启动背景；为空时保留包内默认图。
 	BackgroundPath string
+	// HostInSmali 说明这份基底的服务端地址**不在 string 资源里**，
+	// 而在 smali 的 const-string 字面量里（骆驼壳 = ez 壳就属于这种）。
+	//
+	// 两个壳的注入点不同，是因为基底来源不同：
+	//   - 清和壳（Kotlin 壳，来源 iptv-apk 仓）用 Gradle resValue 把地址写进
+	//     `res/values/strings.xml` 的 qhtv_server_host，改资源即可；
+	//   - 骆驼壳（ez 壳，来源 client/ 的 apktool 解包树）地址是
+	//     SplashActivity 的静态字段，只能改 smali。
+	//
+	// 为 true 时：资源侧只注入 app_name，地址改由 patchClientHostInSmali 处理，
+	// 版本号仍走 apktool.yml（两条路都不依赖 string 资源）。
+	HostInSmali bool
 }
 
 // apktoolLowArgs 是低资源环境下的 apktool 参数。
@@ -91,6 +109,13 @@ func BuildClientApk(baseApk, outApk, workDir string, v ClientBuildValues) error 
 	if err := rewriteClientResources(workDir, v); err != nil {
 		return err
 	}
+	// 骆驼壳的地址在 smali 里，资源改写够不着它 —— 这一步必须跑，
+	// 且命中数为 0 时直接失败（见 patchClientHostInSmali 的说明）。
+	if v.HostInSmali {
+		if err := patchClientHostInSmali(workDir, v.ServerURL); err != nil {
+			return err
+		}
+	}
 	if err := applyClientImages(workDir, v); err != nil {
 		return err
 	}
@@ -119,11 +144,14 @@ func validateClientValues(v ClientBuildValues) error {
 	if strings.TrimSpace(v.ServerURL) == "" {
 		return fmt.Errorf("服务端地址不能为空")
 	}
-	if !strings.HasSuffix(strings.TrimRight(v.ServerURL, "/"), "/apk") {
+	if !hasApkRoutePrefix(v.ServerURL) {
 		// nginx 只对 ^/(apk|mytv|getRss|ku9|epg|r|k)/ 反代，少了 /apk 段
 		// 拼出的 /apk/login 会落到 SPA 返回 HTML，客户端表现为"登录失败"，
 		// 而服务端日志里看不到任何错误 —— 所以在这儿就说清。
-		return fmt.Errorf("服务端地址必须以 /apk 结尾（当前是 %s）", v.ServerURL)
+		//
+		// 两个壳都满足这个前缀，只是骆驼壳多一层 /lt（它是路由级的身份标识，
+		// 服务端据此挑登录密钥，见 api.isLuotuoShell），所以判据是"两选一"。
+		return fmt.Errorf("服务端地址必须以 /apk 或 /apk/lt 结尾（当前是 %s）", v.ServerURL)
 	}
 	if strings.TrimSpace(v.AppName) == "" {
 		return fmt.Errorf("应用名不能为空")
@@ -132,6 +160,16 @@ func validateClientValues(v ClientBuildValues) error {
 		return fmt.Errorf("版本号不能为空")
 	}
 	return nil
+}
+
+// hasApkRoutePrefix 判断基址是否落在客户端接口的路由前缀上。
+//
+// 两个壳各自的前缀：清和壳 `<站点>/apk`，骆驼壳 `<站点>/apk/lt`。
+// 写成**后缀匹配**而不是 `strings.Contains(url, "/apk")`：后者会让
+// `…/apk2`、`…/x/apk/` 这类地址也放过去，而它们同样会落到 SPA 上。
+func hasApkRoutePrefix(serverURL string) bool {
+	trimmed := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	return strings.HasSuffix(trimmed, "/apk") || strings.HasSuffix(trimmed, "/apk/lt")
 }
 
 // rewriteClientResources 改写 res/values/strings.xml 里的三个注入值。
@@ -172,8 +210,15 @@ func rewriteClientResources(workDir string, v ClientBuildValues) error {
 	}
 
 	// 只有**所有桶加起来**仍缺键才是真缺（说明确实不是本工程编出来的基包）。
+	//
+	// 「该有哪些键」按壳区分：骆驼壳的地址与版本号都不走 string 资源
+	// （见 ClientBuildValues.HostInSmali），它只有 app_name 必须命中。
+	required := []string{ResKeyServerHost, ResKeyAppName, ResKeyVersion}
+	if v.HostInSmali {
+		required = []string{ResKeyAppName}
+	}
 	var missing []string
-	for k := range want {
+	for _, k := range required {
 		if !hit[k] {
 			missing = append(missing, k)
 		}
@@ -184,6 +229,63 @@ func rewriteClientResources(workDir string, v ClientBuildValues) error {
 			"基底的 %d 个 strings.xml 里都找不到资源键 %s"+
 				"（这个基包不是本工程编出来的）",
 			touched, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// patchClientHostInSmali 把解包树里 smali 的服务端地址换成 v。只有骆驼壳用得上。
+//
+// ## 为什么必须替换 smali
+//
+// ez 壳（骆驼壳）的地址不是 string 资源：它是 SplashActivity 的静态字段 `p`/`n`
+// 以及 EPG、天气两处的字面量，三处都是 `const-string vN, "…/iptv…"`。
+// Gradle 那套 resValue 注入在它身上不存在，改 strings.xml 一个字都到不了。
+//
+// ## 为什么替换数必须 > 0
+//
+// 正则匹配不上时若静默放过，编出来的包会**指向基底里写死的那个地址**：
+// 编译成功、装得上、连不上 —— 而服务端日志里看不出任何异常。
+// 早先那版实现（a64184d 的 replaceHost）只把匹配结果写回文件、不判命中数，
+// 正是这种「假绿」。所以这里命中 0 次就直接报错。
+//
+// 正则与旧实现同形：匹配以 `/iptv` 结尾的 const-string，
+// 把 `/iptv` 之前的部分整体换成 ServerURL（它已含 `/apk` 段）。
+// 于是 `…/iptv` → `…/apk`，`…/iptv/getepg` → `…/apk/getepg`。
+func patchClientHostInSmali(workDir, serverURL string) error {
+	host := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if host == "" {
+		return fmt.Errorf("服务端地址为空，无法注入骆驼壳的 smali 地址")
+	}
+	// 替换串里的 `$` 在 regexp 展开里有特殊含义，先转义。
+	repl := strings.ReplaceAll(host, "$", "$$")
+	re := regexp.MustCompile(`(const-string\s+[vp]\d+,\s*").*/iptv`)
+	smaliDir := filepath.Join(workDir, "smali")
+	hits := 0
+	err := filepath.WalkDir(smaliDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Ext(path) != ".smali" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		out := re.ReplaceAll(data, []byte("${1}"+repl))
+		if bytes.Equal(out, data) {
+			return nil
+		}
+		hits++
+		return os.WriteFile(path, out, 0644)
+	})
+	if err != nil {
+		return err
+	}
+	if hits == 0 {
+		return fmt.Errorf(
+			"骆驼壳基底的 smali 里找不到以 /iptv 结尾的 const-string（地址注入点），" +
+				"这不是一份可从 smali 注入地址的骆驼壳基底")
 	}
 	return nil
 }

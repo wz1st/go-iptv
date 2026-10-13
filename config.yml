@@ -2,6 +2,9 @@ server_url: http://10.10.220.161
 build:
     name: 清和电视
     version: "1.0"
+build_lt:
+    name: 骆驼电视
+    version: "1.0"
 app:
     needauthor: 0
     buff_time_out: 10

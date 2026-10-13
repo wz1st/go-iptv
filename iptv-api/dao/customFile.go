@@ -27,6 +27,7 @@ const customLicDefaultName = "定制客户端"
 
 type customSiteFile struct {
 	ShowCamel  *int64 `yaml:"show_camel"`
+	ShowQh     *int64 `yaml:"show_qh"`
 	ShowMytv   *int64 `yaml:"show_mytv"`
 	ShowCustom *int64 `yaml:"show_custom"`
 	ShowAdmin  *int64 `yaml:"show_admin"`
@@ -41,13 +42,16 @@ type customConfigFile struct {
 	Apk  customApkFile  `yaml:"apk"`
 }
 
-// CustomDlSwitches 读「默认下载页」的四个按钮开关，外加定制客户端名。
+// CustomDlSwitches 读「默认下载页」的五个按钮开关，外加定制客户端名。
 //
-// 读不到文件（非定制授权时引擎会把文件删掉）或解析失败时，四个开关**一律回 true**：
+// 读不到文件（非定制授权时引擎会把文件删掉）或解析失败时，五个开关**一律回 true**：
 // 默认下载页本来就是所有授权共用的，非定制客户不该因为读不到定制配置而少一排按钮。
 // apkName 兜底成 customLicDefaultName，与引擎侧的取名规则对齐（见该常量注释）。
-func CustomDlSwitches() (camel, mytv, custom, admin bool, apkName string) {
-	camel, mytv, custom, admin = true, true, true, true
+//
+// camel 与 qh 是两个客户端壳各自的开关（camel 归骆驼壳 = 主槽位，qh 归清和壳）——
+// 两者独立，因为两个壳的产物是各自编译、各自发布的。
+func CustomDlSwitches() (camel, qh, mytv, custom, admin bool, apkName string) {
+	camel, qh, mytv, custom, admin = true, true, true, true, true
 	apkName = customLicDefaultName
 
 	data, err := os.ReadFile(CUSTOM_FILE_PATH)
@@ -59,6 +63,7 @@ func CustomDlSwitches() (camel, mytv, custom, admin bool, apkName string) {
 		return
 	}
 	camel = onUnlessOff(raw.Site.ShowCamel)
+	qh = onUnlessOff(raw.Site.ShowQh)
 	mytv = onUnlessOff(raw.Site.ShowMytv)
 	custom = onUnlessOff(raw.Site.ShowCustom)
 	admin = onUnlessOff(raw.Site.ShowAdmin)

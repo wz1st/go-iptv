@@ -69,17 +69,27 @@ func SiteIndexData(c *gin.Context) {
 
 	cfg := dao.GetConfig()
 
-	// 默认下载页四个按钮的开关（配在 /config/custom.yml，定制授权专属）。
-	// 非定制授权读不到那份文件 ⇒ 四个开关都是 true，行为与改造前一致。
+	// 默认下载页的按钮开关（配在 /config/custom.yml，定制授权专属）。
+	// 非定制授权读不到那份文件 ⇒ 开关都是 true，行为与改造前一致。
 	// 这里的"显示"是**开关 && APK 已编译**：文件不存在时按钮点了也是 404，
 	// 所以开关只负责"关"，不负责"无中生有"。
-	swCamel, swMytv, swCustom, swAdmin, customApkName := dao.CustomDlSwitches()
+	swCamel, swQh, swMytv, swCustom, swAdmin, customApkName := dao.CustomDlSwitches()
 	pageData.ShowAdmin = swAdmin
 
-	if swCamel && until.GetFileSize("/config/app/"+cfg.Build.Name+".apk") != "0 MB" {
-		pageData.ShowDown = true
-		pageData.ApkName = cfg.Build.Name + "-" + cfg.Build.Version + ".apk"
-		pageData.ApkUrl = "/app/" + cfg.Build.Name + ".apk"
+	// 两个客户端壳各出各的按钮。**主槽位是骆驼壳**，所以它占用改造前的
+	// `apk_*` 字段（开关也沿用 camel 那条 —— 名字本来就是骆驼）；清和壳用
+	// `apk_qh_*`（见 dto.IndexDto 的说明）。
+	lt := shellDownloadOf(cfg.BuildLt.Name, cfg.BuildLt.Version)
+	qh := shellDownloadOf(cfg.Build.Name, cfg.Build.Version)
+	if swCamel {
+		pageData.ShowDown = lt.Show
+		pageData.ApkName = lt.Name
+		pageData.ApkUrl = lt.Url
+	}
+	if swQh {
+		pageData.ShowDownQh = qh.Show
+		pageData.ApkQhName = qh.Name
+		pageData.ApkQhUrl = qh.Url
 	}
 
 	if swMytv && until.GetFileSize("/config/app/"+cfg.Site.MytvNameOr()+"-mytv.apk") != "0 MB" {
@@ -113,6 +123,9 @@ func SiteIndexData(c *gin.Context) {
 		"show_down":        pageData.ShowDown,
 		"apk_name":         pageData.ApkName,
 		"apk_url":          pageData.ApkUrl,
+		"show_down_qh":     pageData.ShowDownQh,
+		"apk_qh_name":      pageData.ApkQhName,
+		"apk_qh_url":       pageData.ApkQhUrl,
 		"show_down_mytv":   pageData.ShowDownMyTV,
 		"mytv_name":        pageData.MyTVName,
 		"mytv_url":         pageData.MyTVUrl,
@@ -121,6 +134,35 @@ func SiteIndexData(c *gin.Context) {
 		"custom_url":       pageData.CustomUrl,
 		"show_admin":       pageData.ShowAdmin,
 	})
+}
+
+// shellDownload 是下载页上「一个壳」的下载项。
+type shellDownload struct {
+	Show bool
+	Name string // 浏览器存盘用的文件名（含版本号）
+	Url  string // 真实下载地址
+}
+
+// shellDownloadOf 组装一个壳的下载项；产物不存在时 Show 为 false。
+//
+// 判据取**盘上文件的大小**而不是配置里的版本号：只编了待发布包、编到一半、
+// 或者换了基底还没重编，这三种情况下配置里说得出名字，但盘上没有可下载的包 ——
+// 让按钮显示出来只会给用户一个 404。
+//
+// 名字与地址的拼法（`<应用名>-<版本>.apk` / `/app/<应用名>.apk`）两个壳共用，
+// 与 bootstrap.APKDownloadName 同一形状：真实文件按应用名落盘，下载名额外带版本号。
+func shellDownloadOf(name, version string) shellDownload {
+	if strings.TrimSpace(name) == "" {
+		return shellDownload{}
+	}
+	if until.GetFileSize("/config/app/"+name+".apk") == "0 MB" {
+		return shellDownload{}
+	}
+	return shellDownload{
+		Show: true,
+		Name: name + "-" + version + ".apk",
+		Url:  "/app/" + name + ".apk",
+	}
 }
 
 // InstallStateData 对应路由 GET /api/install/state —— 返回当前处于哪一步。

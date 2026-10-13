@@ -90,3 +90,72 @@ func DownloadClientBase(rel *ClientBaseRelease) (string, string, error) {
 	}
 	return apk, dir, nil
 }
+
+// ============================================================================
+// 骆驼壳基底的在线检查与升级（资产名 / 标签前缀与 清和壳 各自独立序列）。
+// 结构与上面 清和壳 同构，刻意不复用 —— 抽成公共实现只会让调用方多传参数，
+// 参数传错就静默选错 release。各自一份、逐字对照更安全。
+// ============================================================================
+
+const (
+	luotuoTagPrefix    = "luotuo-v"
+	luotuoReleaseAsset = "Client_lt.apk"
+	luotuoVerAsset     = "Version_client_lt"
+)
+
+// luotuoTagRe 只匹配骆驼壳基底发布标签。
+var luotuoTagRe = regexp.MustCompile(`^luotuo-v\d+\.\d+\.\d+$`)
+
+// isLuotuoBaseRelease 判断一个 release 是不是骆驼壳基底发布：标签形状 + 资产构成。
+func isLuotuoBaseRelease(r *githubRelease) bool {
+	return luotuoTagRe.MatchString(r.TagName) &&
+		hasAsset(r, luotuoReleaseAsset) && hasAsset(r, luotuoVerAsset)
+}
+
+// LatestLuotuoBaseRelease 取远端最新一版骆驼壳基底发布（正式版，跳过 prerelease）。
+func LatestLuotuoBaseRelease() (*ClientBaseRelease, error) {
+	rel, err := fetchLatestStableRelease(isLuotuoBaseRelease)
+	if err != nil {
+		return nil, err
+	}
+	urls := assetURLs(rel)
+	if urls[luotuoReleaseAsset] == "" || urls[luotuoVerAsset] == "" {
+		return nil, fmt.Errorf("发布 %s 缺少资产 %s / %s",
+			rel.TagName, luotuoReleaseAsset, luotuoVerAsset)
+	}
+	return &ClientBaseRelease{
+		Tag:     rel.TagName,
+		Version: strings.TrimPrefix(rel.TagName, luotuoTagPrefix),
+		ApkURL:  urls[luotuoReleaseAsset],
+		VerURL:  urls[luotuoVerAsset],
+		Route:   LastGhRoute(),
+	}, nil
+}
+
+// DownloadLuotuoBase 把远端骆驼壳基底下到临时目录，返回 (APK 路径, 临时目录, 错误)。
+// Version_client_lt 必须与标签一致 —— 不一致说明发布做坏了，宁可当场失败。
+func DownloadLuotuoBase(rel *ClientBaseRelease) (string, string, error) {
+	dir, err := os.MkdirTemp("", "luotuo-base-")
+	if err != nil {
+		return "", "", err
+	}
+	apk := filepath.Join(dir, luotuoReleaseAsset)
+	ver := filepath.Join(dir, luotuoVerAsset)
+
+	if _, err := ghDownload(rel.ApkURL, apk, 0644); err != nil {
+		os.RemoveAll(dir)
+		return "", "", fmt.Errorf("下载骆驼壳基底失败: %v", err)
+	}
+	if _, err := ghDownload(rel.VerURL, ver, 0644); err != nil {
+		os.RemoveAll(dir)
+		return "", "", fmt.Errorf("下载版本号文件失败: %v", err)
+	}
+	rel.Route = LastGhRoute()
+
+	if remote := strings.TrimSpace(ReadFile(ver)); remote != rel.Version {
+		os.RemoveAll(dir)
+		return "", "", fmt.Errorf("发布内容不一致：标签是 %s，Version_client_lt 里写的是 %s",
+			rel.Tag, remote)
+	}
+	return apk, dir, nil
+}

@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"errors"
 	"fmt"
 	"iptv-api/dao"
 	"iptv-api/until"
@@ -97,6 +96,69 @@ func BuildAPK(staged bool) bool {
 	return true
 }
 
+// BuildLuotuoAPK 编译「骆驼壳」客户端 APK —— 与 BuildAPK 同构，但基底、产品名、
+// 版本号各自独立（见 until.ClientLt* / dto.Config.BuildLt）。
+//
+// **编译接口（BuildClientApk）是两套壳共用的**：只换基底文件与注入值，解包→改写
+// →重编→签名的流程一字不改。这就是"仅 apk 的接口共用"的含义。
+//
+// 唯一的差异是**地址注入点**：清和壳的地址是 Gradle 写进 strings.xml 的资源键，
+// 而骆驼壳（ez 壳）把它写成 smali 的 const-string —— 所以这里要多传
+// HostInSmali: true，由 BuildClientApk 走 patchClientHostInSmali。
+func BuildLuotuoAPK(staged bool) bool {
+	SetBuildStatus(1) // 编译中
+	defer SetBuildStatus(0)
+
+	log.Println("开始编译骆驼壳客户端APK ...")
+	cfg := dao.GetConfig()
+
+	buildNo := cfg.BuildLt.Version
+	apkPath := OfficialAPKPath(cfg.BuildLt.Name)
+	if staged {
+		buildNo = cfg.BuildLt.NewVersion
+		apkPath = StagedAPKPath(cfg.BuildLt.Name)
+	}
+	if buildNo == "" {
+		log.Println("骆驼壳版本号为空，跳过编译")
+		return false
+	}
+
+	baseApk := until.ClientLtBaseDir() + "/Client_lt.apk"
+	if !until.Exists(baseApk) {
+		log.Println("找不到骆驼壳编译基底:", baseApk, "，请先上传或在线升级基底")
+		return false
+	}
+
+	// 先把旧产物挪走：apktool 写失败时会留下半截 APK，而它会顶替掉线上包的位置。
+	_ = os.Remove(apkPath)
+
+	base := until.GetClientLtBaseVersion()
+	workDir := filepath.Join(os.TempDir(), fmt.Sprintf("luotuo_build_%d", time.Now().UnixNano()))
+	values := until.ClientBuildValues{
+		// 骆驼壳的基址比清和壳多一层 /lt —— 它是**路由级的身份标识**，
+		// 服务端据此认出调用方、挑对应的登录密钥（见 api.isLuotuoShell）。
+		ServerURL:      clientApkHostLt(cfg.ServerUrl),
+		AppName:        cfg.BuildLt.Name,
+		Version:        buildNo,
+		VersionName:    until.FormatClientVersion(base, buildNo),
+		IconPath:       clientIconPath(),
+		BackgroundPath: clientBackgroundPath(),
+		// 骆驼壳（ez 壳）的地址写在 smali 的 const-string 里，不是 string 资源 ——
+		// 基底里根本没有 qhtv_server_host / qhtv_version_name 两个键。
+		HostInSmali: true,
+	}
+
+	err := until.BuildClientApk(baseApk, apkPath, workDir, values)
+	defer os.RemoveAll(workDir)
+	if err != nil {
+		log.Println("骆驼壳客户端APK编译失败:", err)
+		return false
+	}
+
+	log.Println("骆驼壳客户端APK编译完成:", apkPath)
+	return true
+}
+
 // clientApkHost 把配置里的站点基址归一成客户端要的那个地址。
 //
 // 两个字段语义不同，不能直接共用：
@@ -118,60 +180,25 @@ func clientApkHost(serverURL string) string {
 	return trimmed + "/apk"
 }
 
-func replaceSmaliPackage(smaliDir, oldPackage, newPackage string) error {
-	oldPath := strings.ReplaceAll(oldPackage, ".", "/")
-	newPath := strings.ReplaceAll(newPackage, ".", "/")
-	return filepath.WalkDir(smaliDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		// 只处理文件且扩展名为 .smali
-		if !d.IsDir() && filepath.Ext(path) == ".smali" {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			content := strings.ReplaceAll(string(data), oldPath, newPath)
-			err = os.WriteFile(path, []byte(content), 0644)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-func movePackageDir(workDir, oldPackagePath, newPackagePath string) error {
-	oldDir := filepath.Join(workDir, oldPackagePath)
-	newDir := filepath.Join(workDir, newPackagePath)
-
-	// 检查旧目录是否存在
-	info, err := os.Stat(oldDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Println("[!]旧目录不存在，跳过移动")
-			return nil
-		}
-		return err
+// clientApkHostLt 是骆驼壳的基址：在 clientApkHost 之上再挂一层 /lt。
+//
+// 这一层不是装饰：两个壳的登录密钥不同（应用名 + 包名都不同），服务端必须能
+// **只从路由**认出调用方。`/apk/lt` 这个段就是那个标识（见 api.isLuotuoShell）。
+//
+// 前缀挂在最后而不是塞成查询参数，是因为骆驼壳那边还会自己接 `/login`、
+// `/getver`、`/getepg`、`/weather`，前缀式的拼法天然对；而查询参数在
+// `n + "/login"` 这种拼法里加不进去（旧包就是靠 `?shell=lt` 兜着的）。
+func clientApkHostLt(serverURL string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if trimmed == "" {
+		return ""
 	}
-	if !info.IsDir() {
-		return errors.New("[!]旧路径不是目录")
+	// 幂等：配置里若已经手写了 /apk/lt，就不要再叠一层（会得到 /apk/lt/apk/lt，
+	// 客户端拿到的是 SPA 的 HTML，表现为"登录失败"而服务端日志无异常）。
+	if strings.HasSuffix(trimmed, "/apk/lt") {
+		return trimmed
 	}
-
-	// 创建新目录的父目录
-	parentDir := filepath.Dir(newDir)
-	err = os.MkdirAll(parentDir, 0755)
-	if err != nil {
-		return err
-	}
-
-	// 移动旧目录到新目录
-	err = os.Rename(oldDir, newDir)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return clientApkHost(trimmed) + "/lt"
 }
 
 // clientBgDir 是上传的启动背景图目录；编译期会挑其中一张打进包内。

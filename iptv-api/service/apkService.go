@@ -49,6 +49,26 @@ func Getver(base string) dto.GetverRes {
 	return res
 }
 
+// GetverLt 取「骆驼壳」客户端版本信息。口径与 Getver 完全一致，只是基底取
+// ClientPublishedLtBase、版本号拼 cfg.BuildLt、下载地址指向 /app/Client_lt.apk。
+//
+// 骆驼壳 apk 的基址被编成 `<站点>/apk/lt`，因此它请求的是 /apk/lt/getver
+// （老包带 `?shell=lt`）—— api 层按路由分流到本函数（见 api.isLuotuoShell），
+// 两个壳共用同一个 Getver 入口，只是各自取自己的基底与版本号。
+func GetverLt(base string) dto.GetverRes {
+	var res dto.GetverRes
+
+	cfg := dao.GetConfig()
+	base = publicBase(base, cfg.ServerUrl)
+
+	res.AppVer = until.FormatClientVersion(until.ClientPublishedLtBase(), cfg.BuildLt.Version)
+	res.UpSets = cfg.App.Update.Set
+	res.UpText = until.FixedUpdateText
+	res.AppURL = base + "/app/" + cfg.BuildLt.Name + ".apk"
+	res.UpSize = until.GetFileSize(bootstrap.OfficialAPKPath(cfg.BuildLt.Name))
+	return res
+}
+
 func GetBg() string {
 	// 获取指定目录下的所有png文件
 	dir := "/config/images/bj"

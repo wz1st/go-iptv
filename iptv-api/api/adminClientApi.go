@@ -121,3 +121,42 @@ func ClientCheckBase(c *gin.Context) {
 func ClientUpgradeBase(c *gin.Context) {
 	reply(c, service.UpgradeClientBase())
 }
+
+// ============================================================================
+// 骆驼壳（独立客户端基底）设置 —— 与上面 清和壳 各自一组路由，资产名 / 标签前缀
+// 都不同；编译期共用的只有 until.BuildClientApk（见 service/adminClientLuotuoService.go）。
+// ============================================================================
+
+// LuotuoAppInfo 保存骆驼壳 APK 构建参数并触发编译。
+func LuotuoAppInfo(c *gin.Context) {
+	var req dto.ClientAppInfoReq
+	if !bindJSON(c, &req) {
+		return
+	}
+	reply(c, service.SetLuotuoAppInfo(req))
+}
+
+// LuotuoBuildStatus 查询骆驼壳 APK 编译进度（顺带回两张卡片要的包信息）。
+func LuotuoBuildStatus(c *gin.Context) {
+	reply(c, service.GetLuotuoBuildStatus())
+}
+
+// LuotuoPublish 发布：把骆驼壳待发布 apk 提升为线上版本。
+func LuotuoPublish(c *gin.Context) {
+	reply(c, service.PublishLuotuoAPK())
+}
+
+// LuotuoUploadBaseApk 上传骆驼壳的编译基底 APK（multipart，字段名 apkfile）。
+func LuotuoUploadBaseApk(c *gin.Context) {
+	reply(c, service.UploadLuotuoBase(c))
+}
+
+// LuotuoCheckBase 在线检查骆驼壳编译基底的最新版本（远端 luotuo-vX.Y.Z 序列）。
+func LuotuoCheckBase(c *gin.Context) {
+	reply(c, service.CheckLuotuoBaseUpdate())
+}
+
+// LuotuoUpgradeBase 在线下载并替换骆驼壳编译基底。
+func LuotuoUpgradeBase(c *gin.Context) {
+	reply(c, service.UpgradeLuotuoBase())
+}
