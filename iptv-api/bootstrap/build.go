@@ -13,36 +13,62 @@ import (
 	"time"
 )
 
-var BuildStatus atomic.Value
+// 上传素材（图标 / 启动背景）的目录**不在这里定义**：两个壳各有一套，口径统一
+// 在 until.ClientIconDir / until.ClientBgDir（连同对外 URL 前缀与包内资源名）。
+// 曾经这里是单个 `const clientBgDir = "/config/images/bj"`，被两个壳共用 ——
+// 那正是「上传的背景图同时进了两个壳」的根因。
 
-func SetBuildStatus(status int64) {
-	BuildStatus.Store(status)
-}
+// 两个壳各有一份**独立**的编译状态。
+//
+// 曾经是单个全局值，后果有两个，都属于"把无关的东西绑在一起"：
+//  1. 骆驼壳编译期间，清和壳的设置页也跟着显示「正在打包中」—— 用户以为清和壳在编；
+//  2. 两个壳互相拒绝发起编译（闸门 `== 1` 是同一个数）。
+//
+// 而两个壳的产物、基底、版本号本来就是各自独立的一整条链
+// （见 until.ClientApkPath / ClientLtApkPath、dto.Config.Build / BuildLt），
+// 状态没有理由共用。
+//
+// 命名上 Set/GetBuildStatus 保持**清和壳**的语义（历史调用点最多），
+// 骆驼壳一律走 Set/GetBuildStatusLt。
+var (
+	buildStatusQh atomic.Value // 清和壳（Client.apk）
+	buildStatusLt atomic.Value // 骆驼壳（Client_lt.apk）
+)
 
-func GetBuildStatus() int64 {
-	v := BuildStatus.Load()
-	if v == nil {
-		return 0 // 没有值时默认返回 0
+func statusOf(v *atomic.Value) int64 {
+	if x := v.Load(); x != nil {
+		return x.(int64)
 	}
-	return v.(int64)
+	return 0 // 没有值时默认返回 0
 }
+
+func SetBuildStatus(status int64) { buildStatusQh.Store(status) }
+
+func GetBuildStatus() int64 { return statusOf(&buildStatusQh) }
+
+// SetBuildStatusLt / GetBuildStatusLt 是**骆驼壳**的编译状态。
+func SetBuildStatusLt(status int64) { buildStatusLt.Store(status) }
+
+func GetBuildStatusLt() int64 { return statusOf(&buildStatusLt) }
 
 // FixedPackage 已下沉到 until 包（until.FixedPackage）。
 
-// apk 的两个落点。
-func OfficialAPKPath(name string) string { return "/config/app/" + name + ".apk" }
+// 产物落点**不再在这里定义**：OfficialAPKPath / StagedAPKPath / APKDownloadName
+// 曾经是 bootstrap 自己拼的一份 `/config/app/<名>.apk`，而 service 层另有一份
+// until.ClientApkPath —— 两份口径就是"编译成功、发布找不到包"那类事故的温床
+// （2026-10-13 实测事故正是如此）。文件名的唯一定义处是 until.ClientApkFileName，
+// 这里与 api/service 都调它。
 
-func StagedAPKPath(name string) string { return "/config/app/" + name + "-new.apk" }
-
-// APK 的下载名（浏览器存盘用）与真实文件路径**刻意不同**。
-func APKDownloadName(name, version string) string {
-	if version == "" {
-		return name + ".apk"
-	}
-	return name + "-" + version + ".apk"
-}
-
-// BuildAPK 编译 APK。
+// BuildAPK 编译客户端 APK。
+//
+// **编译基底是一份编译好的 APK**（镜像内 /app/client/Client.apk，或用户上传到
+// /config/client 的那份），流程是「解包 → 改三个注入值 + 图标/背景 → 重编 → 签名」，
+// 全部在本进程内完成，**不经引擎**。
+//
+// 早先的实现是把一整棵 apktool 解包树（`/client`，56MB）烤进镜像，再用正则去改
+// smali 里的 const-string 与 const/16。那种做法对 smali 结构敏感：apk 一重编译，
+// 指令挪个位置正则就悄悄匹配不上 —— 编译照过、功能不对。现已换成改 string 资源，
+// 见 until/clientBuild.go。
 func BuildAPK(staged bool) bool {
 	SetBuildStatus(1) // 编译中
 	defer SetBuildStatus(0)
@@ -51,10 +77,10 @@ func BuildAPK(staged bool) bool {
 	cfg := dao.GetConfig()
 
 	buildNo := cfg.Build.Version
-	apkPath := OfficialAPKPath(cfg.Build.Name)
+	apkPath := until.ClientApkPath(cfg.Build.Name, false)
 	if staged {
 		buildNo = cfg.Build.NewVersion
-		apkPath = StagedAPKPath(cfg.Build.Name)
+		apkPath = until.ClientApkPath(cfg.Build.Name, true)
 	}
 	if buildNo == "" {
 		log.Println("版本号为空，跳过编译")
@@ -63,7 +89,7 @@ func BuildAPK(staged bool) bool {
 
 	baseApk := until.ClientBaseDir() + "/Client.apk"
 	if !until.Exists(baseApk) {
-		log.Println("找不到编译基底:", baseApk, " ，请先上传或在线升级基底")
+		log.Println("找不到编译基底:", baseApk, "，请先上传或在线升级基底")
 		return false
 	}
 
@@ -79,8 +105,12 @@ func BuildAPK(staged bool) bool {
 		Version:     buildNo,
 		VersionName: until.FormatClientVersion(base, buildNo),
 		// 没上传 logo / 背景时传空串，编译侧就保留包内默认图。
-		IconPath:       clientIconPath(),
-		BackgroundPath: clientBackgroundPath(),
+		// 素材目录与包内资源名都按**清和壳**取 —— 与骆驼壳各一套。
+		IconPath:       clientIconPath(until.ShellQh),
+		BackgroundPath: clientBackgroundPath(until.ShellQh),
+		BgDrawable:     until.ClientBgDrawable(until.ShellQh),
+		// 标明是清和壳：决定用哪一套**固定签名密钥**（until.ClientKeystorePath）。
+		Shell: until.ShellQh,
 	}
 
 	err := until.BuildClientApk(baseApk, apkPath, workDir, values)
@@ -106,17 +136,17 @@ func BuildAPK(staged bool) bool {
 // 而骆驼壳（ez 壳）把它写成 smali 的 const-string —— 所以这里要多传
 // HostInSmali: true，由 BuildClientApk 走 patchClientHostInSmali。
 func BuildLuotuoAPK(staged bool) bool {
-	SetBuildStatus(1) // 编译中
-	defer SetBuildStatus(0)
+	SetBuildStatusLt(1) // 编译中（骆驼壳自己的那一份，不挡清和壳）
+	defer SetBuildStatusLt(0)
 
 	log.Println("开始编译骆驼壳客户端APK ...")
 	cfg := dao.GetConfig()
 
 	buildNo := cfg.BuildLt.Version
-	apkPath := OfficialAPKPath(cfg.BuildLt.Name)
+	apkPath := until.ClientLtApkPath(cfg.BuildLt.Name, false)
 	if staged {
 		buildNo = cfg.BuildLt.NewVersion
-		apkPath = StagedAPKPath(cfg.BuildLt.Name)
+		apkPath = until.ClientLtApkPath(cfg.BuildLt.Name, true)
 	}
 	if buildNo == "" {
 		log.Println("骆驼壳版本号为空，跳过编译")
@@ -141,11 +171,16 @@ func BuildLuotuoAPK(staged bool) bool {
 		AppName:        cfg.BuildLt.Name,
 		Version:        buildNo,
 		VersionName:    until.FormatClientVersion(base, buildNo),
-		IconPath:       clientIconPath(),
-		BackgroundPath: clientBackgroundPath(),
+		IconPath:       clientIconPath(until.ShellLt),
+		BackgroundPath: clientBackgroundPath(until.ShellLt),
+		// 背景资源名是**按壳分**的：骆驼壳基底里叫 ez_bg，没有清和壳那个 qh_bg。
+		// 写成同一个名字的后果不是"图不对"，而是 overlayImage 找不到同名文件
+		// 直接报错 ⇒ 只要后台上传过背景图，骆驼壳就再也编不出来。
+		BgDrawable: until.ClientBgDrawable(until.ShellLt),
 		// 骆驼壳（ez 壳）的地址写在 smali 的 const-string 里，不是 string 资源 ——
 		// 基底里根本没有 qhtv_server_host / qhtv_version_name 两个键。
 		HostInSmali: true,
+		Shell:       until.ShellLt,
 	}
 
 	err := until.BuildClientApk(baseApk, apkPath, workDir, values)
@@ -201,28 +236,29 @@ func clientApkHostLt(serverURL string) string {
 	return clientApkHost(trimmed) + "/lt"
 }
 
-// clientBgDir 是上传的启动背景图目录；编译期会挑其中一张打进包内。
-const clientBgDir = "/config/images/bj"
-
-// clientIconPath 返回上传的 logo；没上传返回空串（保留包内默认图）。
-func clientIconPath() string {
-	p := "/config/images/icon/icon.png"
+// clientIconPath 返回某个壳上传的 logo；没上传返回空串（保留包内默认图）。
+func clientIconPath(shell string) string {
+	p := until.ClientIconFile(shell)
 	if !until.Exists(p) {
 		return ""
 	}
 	return p
 }
 
-// clientBackgroundPath 返回要打进包的启动背景；没上传返回空串。
+// clientBackgroundPath 返回某个壳要打进包的启动背景；没上传返回空串。
 //
-// 刻意**不**在这里随机挑图（until.GetBg 会随机）：
+// **按壳取目录**：两个壳的背景图池是分开的（until.ClientBgDir），这里只读自己
+// 那一份 —— 否则用户在清和壳上传的图会出现在骆驼壳的包里。
+//
+// 刻意**不**在这里随机挑图（运行期下发背景走 service.GetBg 的随机策略）：
 // 打进包里的那张必须是稳定的一张，否则同一版 APK 在不同机器上 logo/背景不一致，
 // 用户会当成"发了不同的版本"。
-func clientBackgroundPath() string {
-	if !until.Exists(clientBgDir) {
+func clientBackgroundPath(shell string) string {
+	dir := until.ClientBgDir(shell)
+	if !until.Exists(dir) {
 		return ""
 	}
-	picks, err := filepath.Glob(filepath.Join(clientBgDir, "*.png"))
+	picks, err := filepath.Glob(filepath.Join(dir, "*.png"))
 	if err != nil || len(picks) == 0 {
 		return ""
 	}

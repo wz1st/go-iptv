@@ -30,8 +30,8 @@ func LuotuoApkInfo() map[string]interface{} {
 	base := until.GetClientLtBaseVersion()
 	pubBase := until.ClientPublishedLtBase()
 
-	official := until.ClientLtApkPath(false)
-	staged := until.ClientLtApkPath(true)
+	official := until.ClientLtApkPath(cfg.BuildLt.Name, false)
+	staged := until.ClientLtApkPath(cfg.BuildLt.Name, true)
 
 	curVersion := until.FormatClientVersion(pubBase, cfg.BuildLt.Version)
 	newVersion := ""
@@ -39,31 +39,49 @@ func LuotuoApkInfo() map[string]interface{} {
 		newVersion = until.FormatClientVersion(base, cfg.BuildLt.NewVersion)
 	}
 
+	// ---- 签名一致性（在线升级能否成立）----
+	//
+	// 编译产物用**该壳的固定 keystore** 签名（until/clientKeystore.go）。
+	// 线上包如果是**早期"每次编译现生成临时密钥"**时代留下的，证书指纹就与
+	// 固定密钥不同 —— 那种设备上点"在线升级"会被系统以签名不一致直接拒掉，
+	// 而且服务端这边一个错都不会报。
+	//
+	// 所以把两个指纹都摆到卡片数据里：不匹配就是"存量设备需要卸载重装一次"
+	// 的明确信号，而不是让用户从"应用未安装"里自己猜。
+	ksSHA := until.ClientKeystoreCertSHA(until.ShellLt)
+	offSHA := until.ApkCertSHA(official)
+
 	return map[string]interface{}{
-		"status": bootstrapStatus(),
+		"status": bootstrapStatusLt(),
 		// ---- 基底 ----
 		"baseVersion": base,
 		"basePkg":     until.ClientLtFactoryPackage(),
 		"pubBase":     pubBase,
+		// ---- 签名 ----
+		"signKeystore": until.KeystoreFingerprintShort(ksSHA),
+		"signOnline":   until.KeystoreFingerprintShort(offSHA),
+		// 三态：true=可覆盖安装；false=线上包与固定密钥不同签（需卸载重装）；
+		// false 且线上包为空（"none"）= 还没发布过，不构成问题。
+		"signMatch": ksSHA != "" && offSHA != "" && ksSHA == offSHA,
 		// ---- 线上包 ----
 		"version": curVersion,
 		"size":    until.GetFileSize(official),
 		"md5":     until.Md5File(official),
-		"url":     "/app/" + until.ClientLtName + ".apk",
-		"name":    apkDownloadName(until.ClientLtName, curVersion),
+		"url":     until.ClientLtApkURL(cfg.BuildLt.Name, false),
+		"name":    until.ClientApkSaveName(cfg.BuildLt.Name, until.ShellLt, curVersion),
 		// ---- 待发布包 ----
 		"newVersion": newVersion,
 		"newSize":    until.GetFileSize(staged),
 		"newMd5":     until.Md5File(staged),
 		"newExists":  until.Exists(staged),
-		"newName":    apkDownloadName(until.ClientLtName, newVersion),
-		"newUrl":     "/app/" + until.ClientLtName + "-new.apk",
+		"newName":    until.ClientApkSaveName(cfg.BuildLt.Name, until.ShellLt, newVersion),
+		"newUrl":     until.ClientLtApkURL(cfg.BuildLt.Name, true),
 	}
 }
 
 // UploadLuotuoBase 上传 / 替换骆驼壳的「编译基底」APK。
 func UploadLuotuoBase(c *gin.Context) dto.ReturnJsonDto {
-	if bootstrap.GetBuildStatus() == 1 {
+	if bootstrap.GetBuildStatusLt() == 1 {
 		return dto.ReturnJsonDto{Code: 0, Msg: "正在打包中，请稍后再试", Type: "danger"}
 	}
 
@@ -132,7 +150,7 @@ func installLuotuoBase(tmp string) dto.ReturnJsonDto {
 	// 「新基底版本号 + 旧基底编译包」的矛盾组合，直接作废。
 	if baseChanged {
 		if cfg := dao.GetConfig(); cfg.BuildLt.NewVersion != "" {
-			os.Remove(until.ClientLtApkPath(true))
+			os.Remove(until.ClientLtApkPath(cfg.BuildLt.Name, true))
 			cfg.BuildLt.NewVersion = ""
 			dao.SetConfig(cfg)
 		}
@@ -177,7 +195,7 @@ func CheckLuotuoBaseUpdate() dto.ReturnJsonDto {
 
 // UpgradeLuotuoBase 在线下载并替换骆驼壳编译基底（落地与校验复用上传路径）。
 func UpgradeLuotuoBase() dto.ReturnJsonDto {
-	if bootstrap.GetBuildStatus() == 1 {
+	if bootstrap.GetBuildStatusLt() == 1 {
 		return dto.ReturnJsonDto{Code: 0, Msg: "正在打包中，请稍后再试", Type: "danger"}
 	}
 
@@ -217,7 +235,7 @@ func UpgradeLuotuoBase() dto.ReturnJsonDto {
 
 // SetLuotuoAppInfo 编译一个新版本骆驼壳 —— 只产出待发布包，不动线上。
 func SetLuotuoAppInfo(req dto.ClientAppInfoReq) dto.ReturnJsonDto {
-	if bootstrap.GetBuildStatus() == 1 {
+	if bootstrap.GetBuildStatusLt() == 1 {
 		return dto.ReturnJsonDto{Code: 0, Msg: "正在打包中，请稍后再试", Type: "danger"}
 	}
 	appServerUrl := req.ServerUrl
@@ -256,15 +274,33 @@ func SetLuotuoAppInfo(req dto.ClientAppInfoReq) dto.ReturnJsonDto {
 
 // GetLuotuoBuildStatus 返回骆驼壳编译进度，并把两张卡片要的数据一次给全。
 func GetLuotuoBuildStatus() dto.ReturnJsonDto {
-	if bootstrap.GetBuildStatus() == 1 {
-		return dto.ReturnJsonDto{Code: 0, Msg: "APK编译中...", Type: "info", Data: LuotuoApkInfo()}
+	info := LuotuoApkInfo()
+	if bootstrap.GetBuildStatusLt() == 1 {
+		return dto.ReturnJsonDto{Code: 0, Msg: "APK编译中...", Type: "info", Data: info}
 	}
-	return dto.ReturnJsonDto{Code: 1, Msg: "APK编译完成", Type: "success", Data: LuotuoApkInfo()}
+
+	msg, typ := "APK编译完成", "success"
+	// 线上包与当前固定密钥不同签 ⇒ 存量设备点「在线升级」会被系统以
+	// INSTALL_FAILED_UPDATE_INCOMPATIBLE 拒掉。这句话必须出现在这里：
+	// 它是**唯一**能让管理员提前知道"升级会失败"的地方 —— 系统侧只弹一句
+	// "应用未安装"，服务端日志里一条异常都没有。
+	//
+	// 只在"线上包确实存在"时才提示（signOnline 为空说明还没发布过或读不出签名）。
+	if online, _ := info["signOnline"].(string); online != "" {
+		if match, _ := info["signMatch"].(bool); !match {
+			msg = "APK编译完成；但线上包与当前固定密钥不是同一把签名密钥（线上 " +
+				fmt.Sprint(info["signOnline"]) + " / 当前 " + fmt.Sprint(info["signKeystore"]) +
+				"），存量设备点「在线升级」会被系统拒绝，需要卸载旧包后重装一次；" +
+				"重装之后同签名，后续升级即可直接覆盖安装。"
+			typ = "warning"
+		}
+	}
+	return dto.ReturnJsonDto{Code: 1, Msg: msg, Type: typ, Data: info}
 }
 
 // PublishLuotuoAPK 把骆驼壳「待发布」的包提升成线上版本。
 func PublishLuotuoAPK() dto.ReturnJsonDto {
-	if bootstrap.GetBuildStatus() == 1 {
+	if bootstrap.GetBuildStatusLt() == 1 {
 		return dto.ReturnJsonDto{Code: 0, Msg: "正在打包中，请稍后再试", Type: "danger"}
 	}
 
@@ -273,12 +309,12 @@ func PublishLuotuoAPK() dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "没有待发布的版本，请先编译", Type: "danger"}
 	}
 
-	staged := until.ClientLtApkPath(true)
+	staged := until.ClientLtApkPath(cfg.BuildLt.Name, true)
 	if !until.Exists(staged) {
 		return dto.ReturnJsonDto{Code: 0, Msg: "待发布的安装包不存在，请重新编译", Type: "danger"}
 	}
 
-	official := until.ClientLtApkPath(false)
+	official := until.ClientLtApkPath(cfg.BuildLt.Name, false)
 	if err := os.Rename(staged, official); err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "发布失败:" + err.Error(), Type: "danger"}
 	}

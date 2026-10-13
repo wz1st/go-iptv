@@ -65,6 +65,12 @@ type ClientBuildValues struct {
 	// 为 true 时：资源侧只注入 app_name，地址改由 patchClientHostInSmali 处理，
 	// 版本号仍走 apktool.yml（两条路都不依赖 string 资源）。
 	HostInSmali bool
+	// Shell 标明这是哪个壳（qh / lt，见 ShellQh / ShellLt）。
+	//
+	// 它决定两件事：签名用**哪一套固定 keystore**（见 ClientKeystorePath），
+	// 以及日志/诊断时怎么称呼这次编译。留空按清和壳处理 ——
+	// 两个壳的应用名允许重名，所以不能靠"名字像不像"去推断是哪个壳。
+	Shell string
 }
 
 // apktoolLowArgs 是低资源环境下的 apktool 参数。
@@ -131,7 +137,7 @@ func BuildClientApk(baseApk, outApk, workDir string, v ClientBuildValues) error 
 		return fmt.Errorf("编译 APK 失败: %v\n%s", err, out)
 	}
 
-	if err := signClientApk(outApk, workDir); err != nil {
+	if err := signClientApk(outApk, v.Shell); err != nil {
 		return err
 	}
 	return nil
@@ -451,35 +457,22 @@ func (v ClientBuildValues) versionName() string {
 	return strings.TrimSpace(v.Version)
 }
 
-// signClientApk 给编译产物签名。keytool 生成临时 keystore，jarsigner 签。
+// signClientApk 给编译产物签名。
 //
-// 签名是必须的：不签的 APK 装不上（Android 要求每个 APK 都有 v1 签名）。
-// 用临时 keystore 而非打包进镜像的 keystore.p12：基底包与发行包用不同密钥，
-// 升级链才不会因为密钥不同而被系统判成"另一个应用"。
-// signClientApk 对齐并签名。
+// ## 签名必须是**固定**的（见 clientKeystore.go 的完整说明）
 //
-// 这里原来用 jarsigner —— 它只产 **v1（JAR）签名**。而本工程基包的
-// targetSdk 是 36，Android 7+ 对 targetSdk≥30 的应用**强制要求 v2/v3 签名**，
-// 于是产物装不上：
+// 早先这里是"每次编译现生成一个临时 keystore"，于是每编译一次签名就变一次。
+// 表面看只是"多点一次多一个包"，实际后果是**在线升级整条链断死**：
+// 签名不同 ⇒ 系统按签名认应用 ⇒ 客户端装新包被拒
+// （INSTALL_FAILED_UPDATE_INCOMPATIBLE），只能卸载重装。
+// 而且失败很安静：服务端日志写着"编译完成、发布成功"。
 //
-//	DOES NOT VERIFY
-//	ERROR: Target SDK version 36 requires a minimum of signature
-//	scheme v2; the APK is not signed with this or a later signature scheme
-//
-// 症状是「编译成功、产出 APK、装到设备上被拒」，且服务端日志里看不出任何异常。
-// 改用 SDK 里的 zipalign + apksigner（v1+v2+v3 一起出）。
-func signClientApk(apkPath, workDir string) error {
-	key := filepath.Join(workDir, "auto_keystore.jks")
-	const alias = "iptvkey"
-	const pass = "123456"
-
-	gen := exec.Command("keytool", "-genkey", "-v",
-		"-keystore", key, "-alias", alias,
-		"-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
-		"-storepass", pass, "-keypass", pass,
-		"-dname", "CN=Auto, OU=Dev, O=Company, L=City, S=State, C=CN")
-	if out, err := gen.CombinedOutput(); err != nil {
-		return fmt.Errorf("生成签名失败: %v\n%s", err, out)
+// 现在统一走该壳的固定 keystore（持久卷 /config/client/keystore_<shell>.p12），
+// 缺则在安装/首次编译时固定一份，之后所有编译签名一致 ⇒ 覆盖安装成立。
+func signClientApk(apkPath, shell string) error {
+	ks, alias, err := EnsureClientKeystore(shell)
+	if err != nil {
+		return err
 	}
 
 	// 先对齐：apksigner 要求输入已 4 字节对齐，否则会拒绝或产出坏包。
@@ -502,8 +495,16 @@ func signClientApk(apkPath, workDir string) error {
 	}
 
 	// v1+v2+v3 全开：v1 兼容老设备，v2/v3 满足 targetSdk≥30 的强制要求。
+	//
+	// 口令/别名来自 clientKeystore.go 的「默认值 + 环境变量覆盖」，
+	// 两者决定签名，必须长期稳定：改一次等于换一把钥匙，存量设备升不了级
+	// 且不报任何错。
+	pass := clientKeystorePass()
+	if pass == "" {
+		return fmt.Errorf("客户端签名口令为空：默认值与 %s 都没给出可用值", keystorePassEnv)
+	}
 	sign := exec.Command(apksignerBin(), "sign",
-		"--ks", key, "--ks-key-alias", alias,
+		"--ks", ks, "--ks-type", "PKCS12", "--ks-key-alias", alias,
 		"--ks-pass", "pass:"+pass, "--key-pass", "pass:"+pass,
 		"--v1-signing-enabled", "true",
 		"--v2-signing-enabled", "true",
