@@ -26,8 +26,8 @@ func TestAesKeyOf_GoldenValues(t *testing.T) {
 		},
 		{
 			name: "骆驼电视", pkg: FixedPackageLt,
-			want: "cb83addc58c1d3f8d79a9e76c03f0212",
-			why:  "骆驼壳：包名是基包自己的 cn.dsmtv.player",
+			want: "9d08d3933e9dd7e0d67591a69ebccb3c",
+			why:  "骆驼壳：包名是基包自己的 xyz.qingh.lutuo",
 		},
 	}
 	for _, c := range cases {
@@ -79,7 +79,7 @@ func TestFixedPackageLt_MatchesLuotuoBase(t *testing.T) {
 	}
 	// 骆驼壳基包的包名来自 client/apktool.yml 的 renameManifestPackage，
 	// 与 client/Client_lt.apk 的 AndroidManifest 一致（已用 AXML 解析核对）。
-	if FixedPackageLt != "cn.dsmtv.player" {
-		t.Fatalf("FixedPackageLt = %q，与骆驼壳基包（cn.dsmtv.player）对不上", FixedPackageLt)
+	if FixedPackageLt != "xyz.qingh.lutuo" {
+		t.Fatalf("FixedPackageLt = %q，与骆驼壳基包（xyz.qingh.lutuo）对不上", FixedPackageLt)
 	}
 }

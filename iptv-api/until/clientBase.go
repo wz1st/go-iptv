@@ -115,7 +115,7 @@ func SetClientPublishedBase(base string) error {
 // 只有文件名分开才真正成立。
 const (
 	ShellQh = "qh" // 清和壳：基底 client/Client.apk（包名 xyz.qingh.qhtv）
-	ShellLt = "lt" // 骆驼壳：基底 client/Client_lt.apk（包名 cn.dsmtv.player）
+	ShellLt = "lt" // 骆驼壳：基底 client/Client_lt.apk（包名 xyz.qingh.lutuo）
 )
 
 // ============================================================================

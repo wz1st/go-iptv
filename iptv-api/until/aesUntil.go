@@ -28,14 +28,17 @@ const FixedAppSign int64 = 12315
 //
 // 为什么必须有这一项：客户端派生登录密钥时用的是**自己的包名**
 // （smali `SplashActivity.smali` 的 `getPackageName()` → 静态字段 C，再进
-// `util/a.smali` 的 md5 链，详见 AesKeyOf 的推导）。清和壳的包名是
-// xyz.qingh.qhtv，而骆驼壳基包（client/Client_lt.apk，经 apktool.yml 的
-// renameManifestPackage）是 cn.dsmtv.player —— 两者不可能共用 FixedPackage，
-// 否则骆驼壳那边解出的一定是乱码。
+// `util/a.smali` 的 md5 链，详见 AesKeyOf 的推导）。两个壳的包名不同，就不可能
+// 共用一份 FixedPackage，否则必有一个壳解出乱码。
 //
 // 这个值由**基包自己**决定，不是随便写的：换掉 client/Client_lt.apk 就必须同步这里
 // （上传基包的准入校验比对的是"与镜像内出厂基包同包名"，所以只要不换基包它不会漂）。
-const FixedPackageLt = "cn.dsmtv.player"
+//
+// 2026-10-13 由 cn.dsmtv.player 改成 xyz.qingh.lutuo（与清和壳 xyz.qingh.qhtv 同前缀）。
+// 这是**换应用**级别的改动：applicationId 变了，包名是 cn.dsmtv.player 的存量设备
+// 既升不了级（系统按 applicationId 认应用），也登录不上（密钥输入里的 C 变了 ⇒
+// 登录响应解成乱码），必须卸载后重新安装新包。
+const FixedPackageLt = "xyz.qingh.lutuo"
 
 // FixedUpdateText 是客户端升级弹窗的固定文案，原为 config.yml 的 app.update.text。
 const FixedUpdateText = "update"

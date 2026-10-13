@@ -12,7 +12,14 @@ VOLUME /config
 EXPOSE 80 443
 
 COPY apktool/apktool apktool/apktool.jar /usr/bin/
-COPY client/Client.apk client/Version_client /app/client/
+# 两套壳的编译基底都要进镜像：**基包是编译基底的唯一来源**，缺哪个壳的，
+# 那个壳就整条链路断掉 —— 且断得很安静：
+#   · ClientFactoryPackage/ClientLtFactoryPackage 探测不到 ⇒ 上传基包时
+#     准入校验直接报"无法读取镜像内*基包包名"；
+#   · 没上传过基包的部署方（绝大多数）编译时基底不存在 ⇒ 编译必失败。
+# 早先只 COPY 了清和壳那份，镜像里的 Client_lt.apk 是手工塞进去的，
+# 一重建镜像就没了 —— 这类"只存在于某台机器上"的状态必须落回 Dockerfile。
+COPY client/Client.apk client/Version_client client/Client_lt.apk client/Version_client_lt /app/client/
 COPY database /app/database
 COPY logo /app/logo
 COPY mytv /app/mytv

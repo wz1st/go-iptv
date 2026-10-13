@@ -181,7 +181,11 @@ VOLUME /config
 EXPOSE 80
 
 COPY apktool/apktool apktool/apktool.jar /usr/bin/
-COPY client /client
+# 两套壳的基包都要落到**程序真正读的** /app/client（until.ClientDir）：
+# 原来这里是 `COPY client /client`，而 until.ClientDir = /app/client ——
+# 结果基包在一个没人看的目录里，等于"镜像内没有基底"，两个壳都编不出来。
+# 路径口子对齐 Dockerfile.web，只拷这四个文件，不再整棵拷 client/。
+COPY client/Client.apk client/Version_client client/Client_lt.apk client/Version_client_lt /app/client/
 COPY database /app/database
 COPY logo /app/logo
 COPY mytv /app/mytv

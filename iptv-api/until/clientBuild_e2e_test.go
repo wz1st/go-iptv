@@ -34,7 +34,7 @@ func TestBuildClientApk_Luotuo_E2E(t *testing.T) {
 	const (
 		wantHost = "http://10.10.220.162:8095/apk"
 		wantName = "骆驼电视"
-		wantVer  = "0.25.5.001"
+		wantVer  = "0.26.0.001"
 	)
 
 	work := filepath.Join(t.TempDir(), "work")
