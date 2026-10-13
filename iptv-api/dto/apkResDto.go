@@ -12,26 +12,42 @@ package dto
 // `regionlimit` 等字段，服务端**从来没有下发过**（也是恒默认值），
 // 那是客户端侧的协议兼容冗余，不在本接口的清理范围。
 type LoginRes struct {
-	Status           int64    `json:"status"`
-	MealName         string   `json:"mealname"`
-	DataURL          string   `json:"dataurl"`
-	AppURL           string   `json:"appurl"`
-	AppVer           string   `json:"appver"`
-	AdText           string   `json:"adtext"`
-	IP               string   `json:"ip"`
-	ShowTime         int64    `json:"showtime"`
-	ProvList         []string `json:"provlist"`
-	ID               int64    `json:"id"`
-	Decoder          int64    `json:"decoder"`
-	BuffTimeOut      int64    `json:"buffTimeOut"`
-	TipUserNoReg     string   `json:"tipusernoreg"`
-	TipLoading       string   `json:"tiploading"`
-	TipUserForbidden string   `json:"tipuserforbidden"`
-	TipUserExpired   string   `json:"tipuserexpired"`
-	Location         string   `json:"location"`
-	NetType          string   `json:"nettype"`
-	RandKey          string   `json:"randkey"`
-	AdInfo           string   `json:"qqinfo"`
+	Status   int64    `json:"status"`
+	MealName string   `json:"mealname"`
+	DataURL  string   `json:"dataurl"`
+	AppURL   string   `json:"appurl"`
+	AppVer   string   `json:"appver"`
+	AdText   string   `json:"adtext"`
+	IP       string   `json:"ip"`
+	ShowTime int64    `json:"showtime"`
+	ProvList []string `json:"provlist"`
+	// 设备账号，**字符串**下发：新装设备是客户端 androidid 原文（如 f8145fb34e8f5d91），
+	// 存量设备是历史随机数字（如 210079），两种格式并存。
+	// 客户端 `ServerConfig.accountId` 声明为 String，两边必须一致 ——
+	// 下发数字会逼 kotlinx 走宽松解析，是个静默的类型陷阱。
+	ID               string `json:"id"`
+	Decoder          int64  `json:"decoder"`
+	BuffTimeOut      int64  `json:"buffTimeOut"`
+	TipUserNoReg     string `json:"tipusernoreg"`
+	TipLoading       string `json:"tiploading"`
+	TipUserForbidden string `json:"tipuserforbidden"`
+	TipUserExpired   string `json:"tipuserexpired"`
+	Location         string `json:"location"`
+	NetType          string `json:"nettype"`
+	RandKey          string `json:"randkey"`
+	// Exp 是账号**剩余天数**（<=0 即已到期）。
+	//
+	// 这个字段曾被当作"没人读"删掉，代价是**骆驼壳全部用户都被判为已到期**：
+	// 骆驼壳 SplashActivity 登录后 `optInt("exp")` 取它（清和壳不读），字段缺失时
+	// optInt 返回 0 ⇒ e=0 ⇒ 弹「账号已到期」并停在授权输入页 —— 登录日志一切正常、
+	// 频道接口也 200，就是进不去主界面。恢复时用 until.ExpireDaysLeft（带符号），
+	// 不要拿 DiffDays 顶替（它取绝对值，已过期账号也会算出正数）。
+	Exp int64 `json:"exp"`
+	// Meal 是套餐名。客户端 SplashActivity 读的是 `meal`（optString("meal")），
+	// 与 MealName 的 json 名（mealname）不一致；两个都下发，免得改任何一边的 tag
+	// 打断另一边的读法（清和壳走的是 mealname）。
+	Meal   string `json:"meal"`
+	AdInfo string `json:"qqinfo"`
 }
 
 type GetverRes struct {
@@ -75,6 +91,11 @@ type ChannelData struct {
 	Num    int64    `json:"num"`
 	Name   string   `json:"name"`
 	Source []string `json:"source"`
+	// Logo 是台标图片的**绝对地址**，由 CaGetChannels 依据频道绑定的 EPG 台名
+	// 从 /config/logo 目录匹配后拼出（见 until.EpgNameGetLogo）。
+	// 空串表示该频道没有绑定 EPG 或目录里没有对应图片，
+	// 客户端应回落到台号文字，不能当作异常。
+	Logo string `json:"logo"`
 }
 
 type DataReqDto struct {
@@ -83,6 +104,14 @@ type DataReqDto struct {
 	Model    string `json:"model"`
 	Region   string `json:"region"`
 	Rand     string `json:"rand"`
+	// AppName 是客户端上报的**自己的应用显示名**（ez 壳 `SplashActivity.l()` 里
+	// `"appname"` ← `getApplicationLabel()`，每次都随频道请求一起发）。
+	//
+	// 服务端必须据此判断调用方是哪个壳：频道载荷要用**该壳自己的密钥**加密
+	// （见 service.GetChannels），而两个壳的密钥不同（应用名 + 包名一起进公式）。
+	// 为什么不靠路由判：骆驼壳请求的是登录下发给它的 dataurl，线上线下都存在
+	// `/apk/channels`（不带 `/lt`）的包，光看路径分不出调用方。
+	AppName string `json:"appname"`
 }
 type Program struct {
 	Name      string `json:"name"`

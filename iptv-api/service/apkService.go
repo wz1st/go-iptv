@@ -122,13 +122,21 @@ func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
 	result.DataURL = base + "/apk/channels"
 	result.AppURL = base + "/app/" + cfg.Build.Name + ".apk"
 	result.ShowTime = cfg.Ad.ShowTime
-	result.TipUserNoReg = "当前账号 " + strconv.FormatInt(user.Name, 10) + " " + cfg.Tips.UserNoReg
-	result.TipUserExpired = "当前账号 " + strconv.FormatInt(user.Name, 10) + " " + cfg.Tips.UserExpired
-	result.TipUserForbidden = "当前账号 " + strconv.FormatInt(user.Name, 10) + " " + cfg.Tips.UserForbidden
-	// 广告内容（客户端退出弹窗那行）：默认固定文案，只有定制授权才下发
-	// 后台配置的自定义值；授权失效会立刻回落默认（见 ApkAdInfo）。
+	// accountId 已改为字符串下发（dto.LoginRes.ID 是 string，见那里的大小写混写说明），
+	// 这里跟着去掉 strconv.FormatInt —— 拼接结果与旧的 FormatInt 逐字相同。
+	result.TipUserNoReg = "当前账号 " + user.Name + " " + cfg.Tips.UserNoReg
+	result.TipUserExpired = "当前账号 " + user.Name + " " + cfg.Tips.UserExpired
+	result.TipUserForbidden = "当前账号 " + user.Name + " " + cfg.Tips.UserForbidden
+	// 广告内容（客户端退出弹窗那行）：**custom 定制** —— 默认固定文案，
+	// 只有定制授权才下发后台配置的自定义值；授权失效会立刻回落默认（见 ApkAdInfo）。
 	result.AdInfo = ApkAdInfo()
-	result.RandKey = until.Md5(time.Now().Format("20060102150405") + strconv.FormatInt(user.Name, 10))
+	// RandKey 参与频道数据解密。存量账号是随机数字串（如 "210079"），
+	// 改类型后拼接结果与旧的 strconv.FormatInt(name, 10) **逐字相同**，
+	// 所以存量设备换到新二进制后仍能解开自己那份数据 —— 这条不能动。
+	result.RandKey = until.Md5(time.Now().Format("20060102150405") + user.Name)
+	// 剩余天数：骆驼壳据此判到期（见 dto.LoginRes.Exp 的注释）。
+	// 缺失时客户端 optInt("exp") 返回 0 ⇒ 所有骆驼壳用户被判"账号已到期"。
+	result.Exp = until.ExpireDaysLeft(user.ExpireTime)
 
 	return getUserInfo(user, result)
 }
@@ -304,6 +312,10 @@ func getUserInfo(user models.IptvUser, result dto.LoginRes) dto.LoginRes {
 	} else {
 		log.Printf("用户: %d 登录成功,IP: %s 设备ID: %s 未授权 \n", result.ID, result.IP, user.DeviceID)
 	}
+
+	// 套餐名再以 `meal` 下发一份：客户端 SplashActivity 读的是这个名
+	// （见 dto.LoginRes.Meal 的注释）。
+	result.Meal = result.MealName
 
 	return result
 }
