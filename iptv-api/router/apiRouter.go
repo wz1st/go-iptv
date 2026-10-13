@@ -139,14 +139,14 @@ var adminRoutes = []apiRoute{
 	{"client/checkBase", api.ClientCheckBase},
 	{"client/upgradeBase", api.ClientUpgradeBase},
 
-	// 清和壳（独立客户端基底）：与 骆驼壳 各自一组路由，编译接口共用 BuildClientApk。
-	{"client/qh/data", api.QingheData},
-	{"client/qh/appInfo", api.QingheAppInfo},
-	{"client/qh/buildStatus", api.QingheBuildStatus},
-	{"client/qh/publish", api.QinghePublish},
-	{"client/qh/uploadBaseApk", api.QingheUploadBaseApk},
-	{"client/qh/checkBase", api.QingheCheckBase},
-	{"client/qh/upgradeBase", api.QingheUpgradeBase},
+	// 骆驼壳（独立客户端基底）：与 清和壳 各自一组路由，编译接口共用 BuildClientApk。
+	{"client/lt/data", api.LuotuoData},
+	{"client/lt/appInfo", api.LuotuoAppInfo},
+	{"client/lt/buildStatus", api.LuotuoBuildStatus},
+	{"client/lt/publish", api.LuotuoPublish},
+	{"client/lt/uploadBaseApk", api.LuotuoUploadBaseApk},
+	{"client/lt/checkBase", api.LuotuoCheckBase},
+	{"client/lt/upgradeBase", api.LuotuoUpgradeBase},
 
 	// 公告：它保存的就是客户端启动时弹出的那条文案（显示时长、显示间隔都是
 	{"client/noticeData", api.NoticeData},
@@ -261,7 +261,14 @@ func registerAPIRoutes(r *gin.Engine) {
 
 	// 客户端 / 播放器接口。这两组是最不能断的 —— APK 的基址烧在 smali 里，
 	// RSS / MyTV 的地址被用户粘进了播放器，所以规范前缀与旧前缀都挂。
-	ApkRouter(r, apiBase+"/apk", "/apk")
+	//
+	// `/apk/lt` 是**骆驼壳**专用前缀：编包时把它的基址注入成 `<站点>/apk/lt`，
+	// 于是它请求 /apk/lt/login、/apk/lt/getver…。为什么要另起前缀而不是只留
+	// `?shell=lt` 参数：登录密钥按"应用名 + 包名"派生（until.AesKeyOf），
+	// 两个壳各有一套，服务端必须能**从路由本身**认出调用方 ——
+	// 光靠参数的话，两个壳一旦同名就分不出来（那时包名不同、密钥仍然不同）。
+	// 参数那条判据保留在 isLuotuoShell 里，兜住已经发出去的旧包。
+	ApkRouter(r, apiBase+"/apk", "/apk", apiBase+"/apk/lt", "/apk/lt")
 	MytvRouter(r, apiBase+"/mytv", "/mytv")
 	RssRouter(r, apiBase, "")
 }

@@ -113,40 +113,40 @@ func ClientUpgradeBase(c *gin.Context) {
 }
 
 // ============================================================================
-// 清和壳（独立客户端基底）设置 —— 与上面 骆驼壳 各自一组路由，资产名 / 标签前缀
-// 都不同；编译期共用的只有 until.BuildClientApk（见 service/adminClientQingheService.go）。
+// 骆驼壳（独立客户端基底）设置 —— 与上面 清和壳 各自一组路由，资产名 / 标签前缀
+// 都不同；编译期共用的只有 until.BuildClientApk（见 service/adminClientLuotuoService.go）。
 // ============================================================================
 
-// QingheAppInfo 保存清和壳 APK 构建参数并触发编译。
-func QingheAppInfo(c *gin.Context) {
+// LuotuoAppInfo 保存骆驼壳 APK 构建参数并触发编译。
+func LuotuoAppInfo(c *gin.Context) {
 	var req dto.ClientAppInfoReq
 	if !bindJSON(c, &req) {
 		return
 	}
-	reply(c, service.SetQingheAppInfo(req))
+	reply(c, service.SetLuotuoAppInfo(req))
 }
 
-// QingheBuildStatus 查询清和壳 APK 编译进度（顺带回两张卡片要的包信息）。
-func QingheBuildStatus(c *gin.Context) {
-	reply(c, service.GetQingheBuildStatus())
+// LuotuoBuildStatus 查询骆驼壳 APK 编译进度（顺带回两张卡片要的包信息）。
+func LuotuoBuildStatus(c *gin.Context) {
+	reply(c, service.GetLuotuoBuildStatus())
 }
 
-// QinghePublish 发布：把清和壳待发布 apk 提升为线上版本。
-func QinghePublish(c *gin.Context) {
-	reply(c, service.PublishQingheAPK())
+// LuotuoPublish 发布：把骆驼壳待发布 apk 提升为线上版本。
+func LuotuoPublish(c *gin.Context) {
+	reply(c, service.PublishLuotuoAPK())
 }
 
-// QingheUploadBaseApk 上传清和壳的编译基底 APK（multipart，字段名 apkfile）。
-func QingheUploadBaseApk(c *gin.Context) {
-	reply(c, service.UploadQingheBase(c))
+// LuotuoUploadBaseApk 上传骆驼壳的编译基底 APK（multipart，字段名 apkfile）。
+func LuotuoUploadBaseApk(c *gin.Context) {
+	reply(c, service.UploadLuotuoBase(c))
 }
 
-// QingheCheckBase 在线检查清和壳编译基底的最新版本（远端 qinghe-vX.Y.Z 序列）。
-func QingheCheckBase(c *gin.Context) {
-	reply(c, service.CheckQingheBaseUpdate())
+// LuotuoCheckBase 在线检查骆驼壳编译基底的最新版本（远端 luotuo-vX.Y.Z 序列）。
+func LuotuoCheckBase(c *gin.Context) {
+	reply(c, service.CheckLuotuoBaseUpdate())
 }
 
-// QingheUpgradeBase 在线下载并替换清和壳编译基底。
-func QingheUpgradeBase(c *gin.Context) {
-	reply(c, service.UpgradeQingheBase())
+// LuotuoUpgradeBase 在线下载并替换骆驼壳编译基底。
+func LuotuoUpgradeBase(c *gin.Context) {
+	reply(c, service.UpgradeLuotuoBase())
 }

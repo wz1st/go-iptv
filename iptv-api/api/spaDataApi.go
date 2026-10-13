@@ -130,9 +130,9 @@ func ClientData(c *gin.Context) {
 	c.JSON(200, pageData)
 }
 
-// QingheData 对应「清和壳」客户端设置页：配置项（站点地址 / 应用设置 / 提示 / 图标 /
-// 背景）与 骆驼壳 共用，只是编译卡片走清和壳自己的基底与版本（见 until.ClientQh*）。
-func QingheData(c *gin.Context) {
+// LuotuoData 对应「骆驼壳」客户端设置页：配置项（站点地址 / 应用设置 / 提示 / 图标 /
+// 背景）与 清和壳 共用，只是编译卡片走骆驼壳自己的基底与版本（见 until.ClientLt*）。
+func LuotuoData(c *gin.Context) {
 	_, ok := until.GetAuthName(c)
 	if !ok {
 		c.JSON(200, dto.NewAdminRedirectDto())
@@ -140,24 +140,24 @@ func QingheData(c *gin.Context) {
 	}
 	cfg := dao.GetConfig()
 
-	official := bootstrap.OfficialAPKPath(until.ClientQhName)
-	staged := bootstrap.StagedAPKPath(until.ClientQhName)
+	official := bootstrap.OfficialAPKPath(cfg.BuildLt.Name)
+	staged := bootstrap.StagedAPKPath(cfg.BuildLt.Name)
 
 	pageData := dto.AdminClientDto{
-		Title:       "清和壳客户端设置",
+		Title:       "骆驼壳客户端设置",
 		ServerUrl:   cfg.ServerUrl,
-		Build:       cfg.BuildQh,
+		Build:       cfg.BuildLt,
 		App:         cfg.App,
 		Tips:        cfg.Tips,
-		ApkUrl:      "/app/" + until.ClientQhName + ".apk",
-		ApkName:     bootstrap.APKDownloadName(until.ClientQhName, cfg.BuildQh.Version),
+		ApkUrl:      "/app/" + cfg.BuildLt.Name + ".apk",
+		ApkName:     bootstrap.APKDownloadName(cfg.BuildLt.Name, cfg.BuildLt.Version),
 		UpSize:      until.GetFileSize(official),
 		ApkMd5:      until.Md5File(official),
-		NewVersion:  cfg.BuildQh.NewVersion,
+		NewVersion:  cfg.BuildLt.NewVersion,
 		NewSize:     until.GetFileSize(staged),
 		NewMd5:      until.Md5File(staged),
-		NewApkUrl:   "/app/" + until.ClientQhName + "-new.apk",
-		NewApkName:  bootstrap.APKDownloadName(until.ClientQhName, cfg.BuildQh.NewVersion),
+		NewApkUrl:   "/app/" + cfg.BuildLt.Name + "-new.apk",
+		NewApkName:  bootstrap.APKDownloadName(cfg.BuildLt.Name, cfg.BuildLt.NewVersion),
 		NewExists:   until.Exists(staged),
 		BuildStatus: bootstrap.GetBuildStatus(),
 	}

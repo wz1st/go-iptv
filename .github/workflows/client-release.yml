@@ -1,13 +1,13 @@
 name: 发布客户端编译基底
 
-# 触发：推送 client-vX.Y.Z（骆驼壳）或 qinghe-vX.Y.Z（清和壳）标签。
+# 触发：推送 client-vX.Y.Z（清和壳）或 luotuo-vX.Y.Z（骆驼壳）标签。
 #
 # 四个发布序列同仓不同前缀，各自独立演进：
 #   vX.Y.Z         api 本体
 #   engine-vX.Y.Z  引擎
 #   mytv-vX.Y.Z    mytv 编译基底
-#   client-vX.Y.Z  客户端（骆驼壳）编译基底（本文件）
-#   qinghe-vX.Y.Z  客户端（清和壳）编译基底（本文件，与 骆驼壳 各自独立资产）
+#   client-vX.Y.Z  客户端（清和壳）编译基底（本文件）
+#   luotuo-vX.Y.Z  客户端（骆驼壳）编译基底（本文件，与 清和壳 各自独立资产）
 #
 # **只发基底，不编发行包**：发行包由使用方（iptv-api 的「客户端设置」）拿基底
 # 在自己那边解包改写后编译出来 —— 服务端链接、应用名、版本号都是运行期才知道的值，
@@ -20,30 +20,30 @@ name: 发布客户端编译基底
 # 本仓不做任何编译 —— 它连 Gradle 文件都没有，只读已有的 client/ 目录。
 #
 # 本文件保留的唯一场景：没配 CI 时，人工往本仓 client/ 目录塞好包，
-# 再打 client-vX.Y.Z / qinghe-vX.Y.Z 标签触发转发。
+# 再打 client-vX.Y.Z / luotuo-vX.Y.Z 标签触发转发。
 # **不要在本仓新建 client/ 目录的 CI 编译流程** —— 两个仓各编一次会分叉，
 # 而分叉的后果是"基包和正式包不是同一份源码"，排查要跨两个仓。
 #
-# 两套壳（骆驼壳 / 清和壳）资产名与版本文件完全独立：
-#   骆驼壳  client/Client.apk        + client/Version_client
-#   清和壳  client/Client_qh.apk     + client/Version_client_qh
+# 两套壳（清和壳 / 骆驼壳）资产名与版本文件完全独立：
+#   清和壳  client/Client.apk        + client/Version_client
+#   骆驼壳  client/Client_lt.apk     + client/Version_client_lt
 # 下载侧（until/clientOnline.go）按标签前缀挑资产，改名会让在线升级静默失效。
 on:
   push:
     tags:
       - 'client-v[0-9]*.[0-9]*.[0-9]*'
-      - 'qinghe-v[0-9]*.[0-9]*.[0-9]*'
+      - 'luotuo-v[0-9]*.[0-9]*.[0-9]*'
   workflow_dispatch:
     inputs:
       version:
-        description: '基底版本号（client-vX.Y.Z 或 qinghe-vX.Y.Z）'
+        description: '基底版本号（client-vX.Y.Z 或 luotuo-vX.Y.Z）'
         required: true
 
 permissions:
   contents: write
 
 # 同一标签排队而非并行：并行发两版会互相覆盖同名资产，最后留下哪一份说不清。
-# 按标签分桶 ⇒ 骆驼壳与清和壳可并行、互不干扰，同序列仍串行。
+# 按标签分桶 ⇒ 清和壳与骆驼壳可并行、互不干扰，同序列仍串行。
 concurrency:
   group: client-release-${{ github.event.inputs.version || github.ref_name }}
   cancel-in-progress: false
@@ -57,7 +57,7 @@ jobs:
         with:
           ref: ${{ github.event.inputs.version || github.ref }}
 
-      # 按标签前缀选定这一发的「壳」：骆驼壳 / 清和壳。
+      # 按标签前缀选定这一发的「壳」：清和壳 / 骆驼壳。
       # 两套壳资产名、版本文件、发布名都不同，抽成变量后下面校验/发布直接复用。
       - name: 选定基底资产
         id: sel
@@ -71,14 +71,14 @@ jobs:
               VER=client/Version_client
               DISP="client"
               ;;
-            qinghe-v*)
-              PREFIX=qinghe-v
-              APK=client/Client_qh.apk
-              VER=client/Version_client_qh
-              DISP="qinghe"
+            luotuo-v*)
+              PREFIX=luotuo-v
+              APK=client/Client_lt.apk
+              VER=client/Version_client_lt
+              DISP="luotuo"
               ;;
             *)
-              echo "::error::标签必须是 client-vX.Y.Z 或 qinghe-vX.Y.Z（收到 $TAG）"
+              echo "::error::标签必须是 client-vX.Y.Z 或 luotuo-vX.Y.Z（收到 $TAG）"
               exit 1
               ;;
           esac
@@ -92,7 +92,7 @@ jobs:
 
       # 标签、版本文件、Client*.apk 三者必须自洽：
       # api 侧 until/clientOnline.go 会把版本文件与标签逐字比对，
-      # 对不上直接拒绝安装（见 DownloadClientBase / DownloadQingheBase）。
+      # 对不上直接拒绝安装（见 DownloadClientBase / DownloadLuotuoBase）。
       # 宁可发布失败，也不要发一份"版本号和内容对不上"的基底 ——
       # 那会让所有在线升级的用户卡在原地。
       - name: 校验基底版本号
@@ -125,7 +125,7 @@ jobs:
           echo "对应资源键：qhtv_server_host / app_name / qhtv_version_name"
 
       # 资产名是外部契约：api 侧 until/clientBase.go / clientOnline.go 按
-      # Client.apk / Version_client 与 Client_qh.apk / Version_client_qh 逐字找，
+      # Client.apk / Version_client 与 Client_lt.apk / Version_client_lt 逐字找，
       # 改名不会有报错，只会在用户点「在线升级」时变成"下载不到"。
       - name: 发布基底到 go-iptv releases
         uses: softprops/action-gh-release@v2

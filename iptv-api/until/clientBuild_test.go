@@ -169,3 +169,107 @@ func TestPatchStringXml_PreservesOtherAttrs(t *testing.T) {
 		t.Error("hit 未被记录")
 	}
 }
+
+// ---------- 骆驼壳（ez 壳）的地址在 smali 里 ----------
+
+// 骆驼壳基底只有 app_name 是 string 资源；地址与版本号都不走资源。
+// 若仍按清和壳那样要求三键齐全，编译会直接失败（"找不到资源键 qhtv_*"）。
+func TestRewriteClientResources_LuotuoOnlyNeedsAppName(t *testing.T) {
+	work := t.TempDir()
+	res := filepath.Join(work, "res")
+	writeStrings(t, filepath.Join(res, "values"), `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">清和电视</string>
+    <string name="abc_action_bar_home_description">Navigate up</string>
+</resources>
+`)
+	v := ClientBuildValues{
+		ServerURL:   "http://10.10.220.162:8090/apk",
+		AppName:     "骆驼电视",
+		Version:     "1.0.0",
+		HostInSmali: true,
+	}
+	if err := rewriteClientResources(work, v); err != nil {
+		t.Fatalf("骆驼壳只缺 qhtv_* 两键时不该报错: %v", err)
+	}
+	if got := readStrings(t, filepath.Join(res, "values")); !strings.Contains(got, "骆驼电视") {
+		t.Errorf("app_name 未写入:\n%s", got)
+	}
+}
+
+func writeSmali(t *testing.T, root, rel, body string) {
+	t.Helper()
+	p := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const ltSplashSmali = `    const-string v0, "http://10.10.220.161/iptv"
+    sput-object v0, Lcom/eztv/powerful/SplashActivity;->n:Ljava/lang/String;
+    const-string v0, "http://10.10.220.161/iptv/getepg"
+    const-string v0, "http://10.10.220.161/iptv/weather"
+    const-string v1, "http://v.baidu.com/commonapi/x?y=1&z"
+`
+
+func TestPatchClientHostInSmali_RewritesAllIptvLiterals(t *testing.T) {
+	work := t.TempDir()
+	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali", ltSplashSmali)
+
+	if err := patchClientHostInSmali(work, "http://10.10.220.162:8090/apk"); err != nil {
+		t.Fatalf("应能替换: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(work, "smali", "com", "eztv", "powerful", "SplashActivity.smali"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	for _, want := range []string{
+		`"http://10.10.220.162:8090/apk"`,
+		`"http://10.10.220.162:8090/apk/getepg"`,
+		`"http://10.10.220.162:8090/apk/weather"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("缺少 %s\n实际:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "10.10.220.161") {
+		t.Errorf("旧兜底地址残留:\n%s", got)
+	}
+	// 与本站无关的地址不该被动
+	if !strings.Contains(got, `"http://v.baidu.com/commonapi/x?y=1&z"`) {
+		t.Errorf("无关地址被误改:\n%s", got)
+	}
+}
+
+// 命中 0 次必须报错：静默放过会编出「指向基底里写死地址」的包 ——
+// 编译成功、装得上、连不上。
+func TestPatchClientHostInSmali_NoMatchIsFatal(t *testing.T) {
+	work := t.TempDir()
+	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
+		"    const-string v0, \"https://example.com/whatever\"\n")
+
+	err := patchClientHostInSmali(work, "http://10.10.220.162:8090/apk")
+	if err == nil {
+		t.Fatal("找不到注入点时必须报错")
+	}
+	if !strings.Contains(err.Error(), "/iptv") {
+		t.Errorf("报错应点名注入点特征，实际: %v", err)
+	}
+}
+
+// 地址里的 `$` 是 regexp 替换串的元字符，必须按字面量写入。
+func TestPatchClientHostInSmali_DollarIsLiteral(t *testing.T) {
+	work := t.TempDir()
+	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali", ltSplashSmali)
+	if err := patchClientHostInSmali(work, "http://h/a$b/apk"); err != nil {
+		t.Fatalf("应能替换: %v", err)
+	}
+	b, _ := os.ReadFile(filepath.Join(work, "smali", "com", "eztv", "powerful", "SplashActivity.smali"))
+	if !strings.Contains(string(b), `"http://h/a$b/apk"`) {
+		t.Errorf("$ 未被当字面量:\n%s", string(b))
+	}
+}

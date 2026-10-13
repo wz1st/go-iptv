@@ -50,22 +50,22 @@ func Getver(base string) dto.GetverRes {
 	return res
 }
 
-// GetverQh 取「清和壳」客户端版本信息。口径与 Getver 完全一致，只是基底取
-// ClientPublishedQhBase、版本号拼 cfg.BuildQh、下载地址指向 /app/Client_qh.apk。
+// GetverLt 取「骆驼壳」客户端版本信息。口径与 Getver 完全一致，只是基底取
+// ClientPublishedLtBase、版本号拼 cfg.BuildLt、下载地址指向 /app/Client_lt.apk。
 //
-// 清和壳 apk 在 getver 请求里带 `?shell=qh`（见 client/smali g$3.smali 的改写），
+// 骆驼壳 apk 在 getver 请求里带 `?shell=lt`（见 client/smali g$3.smali 的改写），
 // api 层据此路由到本函数 —— 两套壳共用同一个 Getver 入口，只按 shell 分流。
-func GetverQh(base string) dto.GetverRes {
+func GetverLt(base string) dto.GetverRes {
 	var res dto.GetverRes
 
 	cfg := dao.GetConfig()
 	base = publicBase(base, cfg.ServerUrl)
 
-	res.AppVer = until.FormatClientVersion(until.ClientPublishedQhBase(), cfg.BuildQh.Version)
+	res.AppVer = until.FormatClientVersion(until.ClientPublishedLtBase(), cfg.BuildLt.Version)
 	res.UpSets = cfg.App.Update.Set
 	res.UpText = until.FixedUpdateText
-	res.AppURL = base + "/app/" + until.ClientQhName + ".apk"
-	res.UpSize = until.GetFileSize(bootstrap.OfficialAPKPath(until.ClientQhName))
+	res.AppURL = base + "/app/" + cfg.BuildLt.Name + ".apk"
+	res.UpSize = until.GetFileSize(bootstrap.OfficialAPKPath(cfg.BuildLt.Name))
 	return res
 }
 
@@ -140,7 +140,7 @@ func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
 // GetChannels 取 APK 客户端的频道列表。
 //
 // 不再预置「我的收藏」分组：该分组原由服务端硬编码下发明文，
-// 两个壳（骆驼壳/清和壳）都据此渲染收藏入口。按需求隐藏收藏功能后，
+// 两个壳（清和壳/骆驼壳）都据此渲染收藏入口。按需求隐藏收藏功能后，
 // 这里直接不再下发该分组 —— apk 侧对分组名做 `.equals("我的收藏")` 判断，
 // 收不到就永远走不到收藏分支（不会崩，只是收藏入口消失）。
 // 收藏本身是 apk 本地库的行为，服务端不下发展示分组即视为"隐藏"。

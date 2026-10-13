@@ -8058,7 +8058,7 @@
     :cond_3
     iget-object v0, p0, Lcom/eztv/powerful/PlayerActivity;->cE:Landroid/widget/Button;
 
-    const/4 v1, 0x8
+    const/16 v1, 0x8
 
     invoke-virtual {v0, v1}, Landroid/widget/Button;->setVisibility(I)V
 
@@ -8067,7 +8067,7 @@
     :cond_4
     iget-object v0, p0, Lcom/eztv/powerful/PlayerActivity;->cF:Landroid/widget/Button;
 
-    const/4 v1, 0x8
+    const/16 v1, 0x8
 
     invoke-virtual {v0, v1}, Landroid/widget/Button;->setVisibility(I)V
 

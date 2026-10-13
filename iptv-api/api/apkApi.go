@@ -11,6 +11,26 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// apkLtSegment 是骆驼壳专用的路径段：骆驼壳编译时注入的基址是 `<站点>/apk/lt`，
+// 于是它请求的是 `/apk/lt/login`、`/apk/lt/getver`…（见 bootstrap.clientApkHostLt）。
+const apkLtSegment = "/apk/lt/"
+
+// isLuotuoShell 判断这次请求来自**骆驼壳**还是清和壳。
+//
+// 判据两条，缺一不可：
+//   - 路径里带 /apk/lt/ 段 —— 新编出来的骆驼壳包走这条（含 apiBase 前缀时同样命中）；
+//   - `?shell=lt` —— 早期已经发出去的骆驼壳包只带这个参数，改不了。丢掉这条会让
+//     存量设备直接失效（表现为登录乱码、升级检查拿错版本号）。
+//
+// 为什么要按"哪个壳"分流而不是一刀切：两个壳的**应用名与包名都不同**，
+// 登录密钥是这两者的函数（until.AesKeyOf），共用一份密钥必然有一边解不开。
+func isLuotuoShell(c *gin.Context) bool {
+	if strings.Contains(c.Request.URL.Path, apkLtSegment) {
+		return true
+	}
+	return c.Query("shell") == "lt"
+}
+
 func ApkLogin(c *gin.Context) {
 	var user dto.ApkUser
 
@@ -42,7 +62,14 @@ func ApkLogin(c *gin.Context) {
 
 	resObj, _ := json.Marshal(result)
 
-	aes := until.NewAes(until.GetAesKey()[5:21], "AES-128-ECB", "")
+	// 密钥按壳挑：清和壳与骆驼壳的应用名、包名都不同，密钥必须各算各的
+	// （公式与客户端 smali 的 md5 链逐字一致，见 until.AesKeyOf）。
+	// [5:21] 取的是客户端那条 `F.substring(5, 21)` 的同一切片 —— 两边口径必须一样。
+	key := until.GetAesKey()
+	if isLuotuoShell(c) {
+		key = until.GetAesKeyLt()
+	}
+	aes := until.NewAes(key[5:21], "AES-128-ECB", "")
 	reAes, _ := aes.Encrypt(string(resObj))
 
 	c.String(http.StatusOK, reAes)
@@ -50,9 +77,10 @@ func ApkLogin(c *gin.Context) {
 
 func Getver(c *gin.Context) {
 	// 与 ApkLogin 同一口径：下载地址按请求基址拼，避免站点上 HTTPS 后仍下发 http 明文包地址。
-	// 清和壳 apk 在请求里带 ?shell=qh，据此分流到各自的版本信息（共用同一入口）。
-	if c.Query("shell") == "qh" {
-		result := service.GetverQh(adminBase(c))
+	// 骆驼壳的版本信息走自己的那套（基底 /app/client/Client_lt.apk、版本号 cfg.BuildLt.Version）
+	// —— 分流判据与登录完全一致（见 isLuotuoShell）。
+	if isLuotuoShell(c) {
+		result := service.GetverLt(adminBase(c))
 		c.JSON(http.StatusOK, result)
 		return
 	}

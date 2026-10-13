@@ -158,85 +158,85 @@ func ClientFactoryPackage() string {
 }
 
 // ============================================================================
-// 清和壳（独立客户端基底，与 骆驼壳 两套资产互不干涉）
+// 骆驼壳（独立客户端基底，与 清和壳 两套资产互不干涉）
 //
-// 刻意不复用上面的 骆驼壳 函数：两者资产名、版本文件、发布标签前缀都不一样，
+// 刻意不复用上面的 清和壳 函数：两者资产名、版本文件、发布标签前缀都不一样，
 // 抽成"带 shell 参数的公共实现"后调用方要多传参数，而参数传错就是**静默选错基底**
 // （表现为"在线升级装了个别的壳"）。各自一份、逐字对照，比省下的重复更安全。
 //
 // 资产名（与 CI 逐字契约）：
-//   - Client_qh.apk      编译基底 APK
-//   - Version_client_qh  基底版本，形如 1.0.0
-// 发布标签前缀：qinghe-vX.Y.Z（见 until/clientOnline.go）。
-// 产品名固定 Client_qh（见 bootstrap.BuildQingheAPK），下载地址 /app/Client_qh.apk。
+//   - Client_lt.apk      编译基底 APK
+//   - Version_client_lt  基底版本，形如 1.0.0
+// 发布标签前缀：luotuo-vX.Y.Z（见 until/clientOnline.go）。
+// 产品名固定 Client_lt（见 bootstrap.BuildLuotuoAPK），下载地址 /app/Client_lt.apk。
 // ============================================================================
 
 const (
-	clientQhBaseAsset    = "Client_qh.apk"
-	clientQhVersionAsset = "Version_client_qh"
+	clientLtBaseAsset    = "Client_lt.apk"
+	clientLtVersionAsset = "Version_client_lt"
 )
 
-// ClientQhName 是清和壳编译产物的固定文件名（不含 .apk）。
-const ClientQhName = "Client_qh"
+// ClientLtName 是骆驼壳编译产物的固定文件名（不含 .apk）。
+const ClientLtName = "Client_lt"
 
-// PubClientQhBaseFile 记录"线上清和壳包编译时所用的基底版本"。
-func PubClientQhBaseFile() string { return ClientUserDir + "/PubBase_qh" }
+// PubClientLtBaseFile 记录"线上骆驼壳包编译时所用的基底版本"。
+func PubClientLtBaseFile() string { return ClientUserDir + "/PubBase_lt" }
 
 var (
-	clientQhFactoryPkgOnce sync.Once
-	clientQhFactoryPkg     string
+	clientLtFactoryPkgOnce sync.Once
+	clientLtFactoryPkg     string
 )
 
-// ClientQhBaseDir 返回清和壳当前生效的基底目录：用户上传优先，没有才用镜像自带。
-func ClientQhBaseDir() string {
-	if ReadFile(ClientUserDir+"/"+clientQhVersionAsset) != "" &&
-		Exists(ClientUserDir+"/"+clientQhBaseAsset) {
+// ClientLtBaseDir 返回骆驼壳当前生效的基底目录：用户上传优先，没有才用镜像自带。
+func ClientLtBaseDir() string {
+	if ReadFile(ClientUserDir+"/"+clientLtVersionAsset) != "" &&
+		Exists(ClientUserDir+"/"+clientLtBaseAsset) {
 		return ClientUserDir
 	}
 	return ClientDir
 }
 
-// GetClientQhBaseVersion 读清和壳基底版本号（用户上传目录优先，回落镜像）。
-func GetClientQhBaseVersion() string {
-	return BaseVersionFromRelease(ReadFile(ClientQhBaseDir() + "/" + clientQhVersionAsset))
+// GetClientLtBaseVersion 读骆驼壳基底版本号（用户上传目录优先，回落镜像）。
+func GetClientLtBaseVersion() string {
+	return BaseVersionFromRelease(ReadFile(ClientLtBaseDir() + "/" + clientLtVersionAsset))
 }
 
-// ClientPublishedQhBase 返回线上清和壳包所用的基底版本；没有记录时回落当前基底。
-func ClientPublishedQhBase() string {
-	if v := ReadFile(PubClientQhBaseFile()); v != "" {
+// ClientPublishedLtBase 返回线上骆驼壳包所用的基底版本；没有记录时回落当前基底。
+func ClientPublishedLtBase() string {
+	if v := ReadFile(PubClientLtBaseFile()); v != "" {
 		return v
 	}
-	return GetClientQhBaseVersion()
+	return GetClientLtBaseVersion()
 }
 
-// SetClientPublishedQhBase 记录线上清和壳包用的是哪版基底（发布时写一次）。
-func SetClientPublishedQhBase(base string) error {
+// SetClientPublishedLtBase 记录线上骆驼壳包用的是哪版基底（发布时写一次）。
+func SetClientPublishedLtBase(base string) error {
 	if base == "" {
 		return nil
 	}
 	if err := os.MkdirAll(ClientUserDir, 0755); err != nil {
 		return err
 	}
-	return WriteFileAtomic(PubClientQhBaseFile(), base+"\n", 0644)
+	return WriteFileAtomic(PubClientLtBaseFile(), base+"\n", 0644)
 }
 
-// ClientQhApkPath 返回清和壳产物在持久卷里的路径。staged=true 取待发布包。
-func ClientQhApkPath(staged bool) string {
+// ClientLtApkPath 返回骆驼壳产物在持久卷里的路径。staged=true 取待发布包。
+func ClientLtApkPath(staged bool) string {
 	suffix := ".apk"
 	if staged {
 		suffix = "-new.apk"
 	}
-	return filepath.Join("/config/app", ClientQhName+suffix)
+	return filepath.Join("/config/app", ClientLtName+suffix)
 }
 
-// ClientQhFactoryPackage 返回镜像出厂清和壳基包（/app/client/Client_qh.apk）的包名。
-func ClientQhFactoryPackage() string {
-	clientQhFactoryPkgOnce.Do(func() {
-		info, err := ProbeApk(ClientDir + "/" + clientQhBaseAsset)
+// ClientLtFactoryPackage 返回镜像出厂骆驼壳基包（/app/client/Client_lt.apk）的包名。
+func ClientLtFactoryPackage() string {
+	clientLtFactoryPkgOnce.Do(func() {
+		info, err := ProbeApk(ClientDir + "/" + clientLtBaseAsset)
 		if err != nil {
 			return
 		}
-		clientQhFactoryPkg = info.Package
+		clientLtFactoryPkg = info.Package
 	})
-	return clientQhFactoryPkg
+	return clientLtFactoryPkg
 }

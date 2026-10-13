@@ -119,11 +119,13 @@ type SSL struct {
 }
 
 type Config struct {
-	ServerUrl  string     `mapstructure:"server_url" json:"server_url" yaml:"server_url"`
-	Build      Build      `mapstructure:"build" json:"build" yaml:"build"`
-	// BuildQh 是「清和壳」客户端的独立编译版本号（与 骆驼壳 互不影响）。
-	// 产品名固定为 Client_qh（见 until.ClientQhName），不在此处配置。
-	BuildQh    Build      `mapstructure:"build_qh" json:"buildQh" yaml:"build_qh"`
+	ServerUrl string `mapstructure:"server_url" json:"server_url" yaml:"server_url"`
+	Build     Build  `mapstructure:"build" json:"build" yaml:"build"`
+	// BuildLt 是「骆驼壳」（smali 树编出来的那套）的独立编译参数：应用名与版本号，
+	// 与 清和壳（Client.apk，即上面的 Build）互不影响。
+	// **这一项必须同时在 iptv-engine/dto/configDto.go 里声明** —— 引擎会整份重写
+	// config.yml，只在一侧声明的键会在引擎保存配置时被静默丢掉。
+	BuildLt    Build      `mapstructure:"build_lt" json:"buildLt" yaml:"build_lt"`
 	App        App        `mapstructure:"app" json:"app" yaml:"app"`
 	Tips       Tips       `mapstructure:"tips" json:"tips" yaml:"tips"`
 	Ad         Ad         `mapstructure:"ad" json:"ad" yaml:"ad"`
