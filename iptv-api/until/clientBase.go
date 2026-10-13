@@ -139,6 +139,24 @@ func ClientApkSaveName(name, shell, version string) string {
 	return name + "-" + shell + "-" + version + ".apk"
 }
 
+// ClientApkLabel 是下载按钮上给用户**看**的文案：`<应用名>[-<版本>].apk`，
+// **不带壳标记**。
+//
+// 与 ClientApkSaveName 只差一个 `-<壳>` 段，但两者服务的是不同的东西：
+//   - 存盘名（:download / 浏览器另存）必须带壳标记 —— 两个壳重名时，
+//     用户本地才不会出现两个同名文件，也才看得出下的是哪一个壳；
+//   - 按钮文案不带 —— 用户在这一屏关心的是"这个包是什么版本"，
+//     而不是壳的内部代号；`清和电视-qh-1.3.2.001.apk` 这种一串代号摆在按钮上
+//     是把内部命名泄漏给了用户。
+//
+// 壳本身已经由按钮上的「（清和壳）/（骆驼壳）」和按钮分组说清楚了。
+func ClientApkLabel(name, version string) string {
+	if version == "" {
+		return name + ".apk"
+	}
+	return name + "-" + version + ".apk"
+}
+
 // ClientApkURL / ClientLtApkURL 是产物的对外下载路径（路由把 /app 映射到 /config/app）。
 func ClientApkURL(name string, staged bool) string {
 	return "/app/" + ClientApkFileName(name, ShellQh, staged)

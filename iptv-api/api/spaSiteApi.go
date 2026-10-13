@@ -72,9 +72,11 @@ func SiteIndexData(c *gin.Context) {
 	qh := shellDownloadOf(cfg.Build.Name, until.ShellQh, cfg.Build.Version)
 	pageData.ShowDown = lt.Show
 	pageData.ApkName = lt.Name
+	pageData.ApkLabel = lt.Label
 	pageData.ApkUrl = lt.Url
 	pageData.ShowDownQh = qh.Show
 	pageData.ApkQhName = qh.Name
+	pageData.ApkQhLabel = qh.Label
 	pageData.ApkQhUrl = qh.Url
 
 	if until.GetFileSize("/config/app/"+cfg.Site.MytvNameOr()+"-mytv.apk") != "0 MB" {
@@ -96,9 +98,11 @@ func SiteIndexData(c *gin.Context) {
 		"site_name":      SiteName,
 		"show_down":      pageData.ShowDown,
 		"apk_name":       pageData.ApkName,
+		"apk_label":      pageData.ApkLabel,
 		"apk_url":        pageData.ApkUrl,
 		"show_down_qh":   pageData.ShowDownQh,
 		"apk_qh_name":    pageData.ApkQhName,
+		"apk_qh_label":   pageData.ApkQhLabel,
 		"apk_qh_url":     pageData.ApkQhUrl,
 		"show_down_mytv": pageData.ShowDownMyTV,
 		"mytv_name":      pageData.MyTVName,
@@ -109,8 +113,12 @@ func SiteIndexData(c *gin.Context) {
 // shellDownload 是下载页上「一个壳」的下载项。
 type shellDownload struct {
 	Show bool
-	Name string // 浏览器存盘用的文件名（含版本号）
+	Name string // 浏览器存盘用的文件名（含壳标记与版本号）
 	Url  string // 真实下载地址
+	// Label 是按钮上的**文案**：同样带版本号，但**不带壳标记**（见
+	// until.ClientApkLabel）。按钮分组与「（清和壳）」后缀已经把壳说清楚了，
+	// 再把 `-qh` / `-lt` 摆到文案上是把内部命名泄漏给用户。
+	Label string
 }
 
 // shellDownloadOf 组装一个壳的下载项；产物不存在时 Show 为 false。
@@ -132,9 +140,10 @@ func shellDownloadOf(name, shell, version string) shellDownload {
 		return shellDownload{}
 	}
 	return shellDownload{
-		Show: true,
-		Name: until.ClientApkSaveName(name, shell, version),
-		Url:  until.ClientApkURLOf(name, shell, false),
+		Show:  true,
+		Name:  until.ClientApkSaveName(name, shell, version),
+		Url:   until.ClientApkURLOf(name, shell, false),
+		Label: until.ClientApkLabel(name, version),
 	}
 }
 
