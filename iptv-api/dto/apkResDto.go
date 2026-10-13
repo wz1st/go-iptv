@@ -35,7 +35,19 @@ type LoginRes struct {
 	Location         string `json:"location"`
 	NetType          string `json:"nettype"`
 	RandKey          string `json:"randkey"`
-	AdInfo           string `json:"qqinfo"`
+	// Exp 是账号**剩余天数**（<=0 即已到期）。
+	//
+	// 这个字段曾被当作"没人读"删掉，代价是**骆驼壳全部用户都被判为已到期**：
+	// 骆驼壳 SplashActivity 登录后 `optInt("exp")` 取它（清和壳不读），字段缺失时
+	// optInt 返回 0 ⇒ e=0 ⇒ 弹「账号已到期」并停在授权输入页 —— 登录日志一切正常、
+	// 频道接口也 200，就是进不去主界面。恢复时用 until.ExpireDaysLeft（带符号），
+	// 不要拿 DiffDays 顶替（它取绝对值，已过期账号也会算出正数）。
+	Exp int64 `json:"exp"`
+	// Meal 是套餐名。客户端 SplashActivity 读的是 `meal`（optString("meal")），
+	// 与 MealName 的 json 名（mealname）不一致；两个都下发，免得改任何一边的 tag
+	// 打断另一边的读法（清和壳走的是 mealname）。
+	Meal   string `json:"meal"`
+	AdInfo string `json:"qqinfo"`
 }
 
 type GetverRes struct {

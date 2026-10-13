@@ -408,6 +408,23 @@ func DiffDays(ts1, ts2 int64) int {
 	return int(math.Ceil(days))
 }
 
+// ExpireDaysLeft 返回账号**剩余**天数（负数 = 已过期），基准是北京时间的"今天零点"。
+//
+// 与 DiffDays 的本质区别是**有方向**：DiffDays 取绝对值，只能回答"差多少天"，
+// 回答不了"还剩几天 / 过期几天"。骆驼壳登录后读响应体里的 `exp` 判到期
+// （SplashActivity 里 `optInt("exp")` → 字段 e，`e <= 0` 就弹「账号已到期」
+// 并停在授权输入页），所以这里必须是带符号的剩余天数 —— 拿 DiffDays 顶替，
+// 已过期账号（expire_time=0，即"自动授权"建的账号）也会算出一个正数。
+//
+// 时区刻意钉成北京时间：容器跑 UTC，用 UTC 的"今天零点"会在每天 08:00 之前
+// 把到期日整体算错一天（与 EPG 的当天判定是同一类坑）。
+func ExpireDaysLeft(expireTime int64) int64 {
+	cst := time.FixedZone("CST", 8*3600)
+	now := time.Now().In(cst)
+	todayZero := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cst)
+	return (expireTime - todayZero.Unix()) / 86400
+}
+
 func GetContainerID() (string, error) {
 	hostname, err := os.ReadFile("/etc/hostname")
 	if err != nil {

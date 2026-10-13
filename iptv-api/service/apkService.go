@@ -136,6 +136,8 @@ func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
 	// 改类型后拼接结果与旧的 strconv.FormatInt(name, 10) **逐字相同**，
 	// 所以存量设备换到新二进制后仍能解开自己那份数据 —— 这条不能动。
 	result.RandKey = until.Md5(time.Now().Format("20060102150405") + user.Name)
+	// 剩余天数：骆驼壳据此判到期（见 dto.LoginRes.Exp 的注释）。
+	result.Exp = until.ExpireDaysLeft(user.ExpireTime)
 
 	return getUserInfo(user, result)
 }
@@ -358,6 +360,10 @@ func getUserInfo(user models.IptvUser, result dto.LoginRes) dto.LoginRes {
 	} else {
 		log.Printf("用户: %s 登录成功,IP: %s 设备ID: %s 未授权 \n", result.ID, result.IP, user.DeviceID)
 	}
+
+	// 套餐名再以 `meal` 下发一份：客户端 SplashActivity 读的是这个名
+	// （见 dto.LoginRes.Meal 的注释）。
+	result.Meal = result.MealName
 
 	return result
 }
