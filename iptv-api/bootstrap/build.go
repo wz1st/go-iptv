@@ -109,6 +109,8 @@ func BuildAPK(staged bool) bool {
 		IconPath:       clientIconPath(until.ShellQh),
 		BackgroundPath: clientBackgroundPath(until.ShellQh),
 		BgDrawable:     until.ClientBgDrawable(until.ShellQh),
+		// 标明是清和壳：决定用哪一套**固定签名密钥**（until.ClientKeystorePath）。
+		Shell: until.ShellQh,
 	}
 
 	err := until.BuildClientApk(baseApk, apkPath, workDir, values)
@@ -178,6 +180,7 @@ func BuildLuotuoAPK(staged bool) bool {
 		// 骆驼壳（ez 壳）的地址写在 smali 的 const-string 里，不是 string 资源 ——
 		// 基底里根本没有 qhtv_server_host / qhtv_version_name 两个键。
 		HostInSmali: true,
+		Shell:       until.ShellLt,
 	}
 
 	err := until.BuildClientApk(baseApk, apkPath, workDir, values)

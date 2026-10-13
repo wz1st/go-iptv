@@ -39,12 +39,30 @@ func LuotuoApkInfo() map[string]interface{} {
 		newVersion = until.FormatClientVersion(base, cfg.BuildLt.NewVersion)
 	}
 
+	// ---- 签名一致性（在线升级能否成立）----
+	//
+	// 编译产物用**该壳的固定 keystore** 签名（until/clientKeystore.go）。
+	// 线上包如果是**早期"每次编译现生成临时密钥"**时代留下的，证书指纹就与
+	// 固定密钥不同 —— 那种设备上点"在线升级"会被系统以签名不一致直接拒掉，
+	// 而且服务端这边一个错都不会报。
+	//
+	// 所以把两个指纹都摆到卡片数据里：不匹配就是"存量设备需要卸载重装一次"
+	// 的明确信号，而不是让用户从"应用未安装"里自己猜。
+	ksSHA := until.ClientKeystoreCertSHA(until.ShellLt)
+	offSHA := until.ApkCertSHA(official)
+
 	return map[string]interface{}{
 		"status": bootstrapStatusLt(),
 		// ---- 基底 ----
 		"baseVersion": base,
 		"basePkg":     until.ClientLtFactoryPackage(),
 		"pubBase":     pubBase,
+		// ---- 签名 ----
+		"signKeystore": until.KeystoreFingerprintShort(ksSHA),
+		"signOnline":   until.KeystoreFingerprintShort(offSHA),
+		// 三态：true=可覆盖安装；false=线上包与固定密钥不同签（需卸载重装）；
+		// false 且线上包为空（"none"）= 还没发布过，不构成问题。
+		"signMatch": ksSHA != "" && offSHA != "" && ksSHA == offSHA,
 		// ---- 线上包 ----
 		"version": curVersion,
 		"size":    until.GetFileSize(official),
@@ -256,10 +274,28 @@ func SetLuotuoAppInfo(req dto.ClientAppInfoReq) dto.ReturnJsonDto {
 
 // GetLuotuoBuildStatus 返回骆驼壳编译进度，并把两张卡片要的数据一次给全。
 func GetLuotuoBuildStatus() dto.ReturnJsonDto {
+	info := LuotuoApkInfo()
 	if bootstrap.GetBuildStatusLt() == 1 {
-		return dto.ReturnJsonDto{Code: 0, Msg: "APK编译中...", Type: "info", Data: LuotuoApkInfo()}
+		return dto.ReturnJsonDto{Code: 0, Msg: "APK编译中...", Type: "info", Data: info}
 	}
-	return dto.ReturnJsonDto{Code: 1, Msg: "APK编译完成", Type: "success", Data: LuotuoApkInfo()}
+
+	msg, typ := "APK编译完成", "success"
+	// 线上包与当前固定密钥不同签 ⇒ 存量设备点「在线升级」会被系统以
+	// INSTALL_FAILED_UPDATE_INCOMPATIBLE 拒掉。这句话必须出现在这里：
+	// 它是**唯一**能让管理员提前知道"升级会失败"的地方 —— 系统侧只弹一句
+	// "应用未安装"，服务端日志里一条异常都没有。
+	//
+	// 只在"线上包确实存在"时才提示（signOnline 为空说明还没发布过或读不出签名）。
+	if online, _ := info["signOnline"].(string); online != "" {
+		if match, _ := info["signMatch"].(bool); !match {
+			msg = "APK编译完成；但线上包与当前固定密钥不是同一把签名密钥（线上 " +
+				fmt.Sprint(info["signOnline"]) + " / 当前 " + fmt.Sprint(info["signKeystore"]) +
+				"），存量设备点「在线升级」会被系统拒绝，需要卸载旧包后重装一次；" +
+				"重装之后同签名，后续升级即可直接覆盖安装。"
+			typ = "warning"
+		}
+	}
+	return dto.ReturnJsonDto{Code: 1, Msg: msg, Type: typ, Data: info}
 }
 
 // PublishLuotuoAPK 把骆驼壳「待发布」的包提升成线上版本。
