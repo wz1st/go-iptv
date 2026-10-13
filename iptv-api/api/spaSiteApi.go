@@ -68,8 +68,8 @@ func SiteIndexData(c *gin.Context) {
 
 	// 两个壳各出各的按钮。**主槽位是骆驼壳**（smali 树那套），所以它占用
 	// 改造前的 `apk_*` 字段；清和壳用 `apk_qh_*`（见 dto.IndexDto 的说明）。
-	lt := shellDownloadOf(cfg.BuildLt.Name, cfg.BuildLt.Version)
-	qh := shellDownloadOf(cfg.Build.Name, cfg.Build.Version)
+	lt := shellDownloadOf(cfg.BuildLt.Name, until.ShellLt, cfg.BuildLt.Version)
+	qh := shellDownloadOf(cfg.Build.Name, until.ShellQh, cfg.Build.Version)
 	pageData.ShowDown = lt.Show
 	pageData.ApkName = lt.Name
 	pageData.ApkUrl = lt.Url
@@ -119,19 +119,22 @@ type shellDownload struct {
 // 或者换了基底还没重编，这三种情况下配置里说得出名字，但盘上没有可下载的包 ——
 // 让按钮显示出来只会给用户一个 404。
 //
-// 名字与地址的拼法（`<应用名>-<版本>.apk` / `/app/<应用名>.apk`）两个壳共用，
-// 与 bootstrap.APKDownloadName 同一形状：真实文件按应用名落盘，下载名额外带版本号。
-func shellDownloadOf(name, version string) shellDownload {
+// 名字与地址的拼法（`<应用名>-<壳>[-<版本>].apk` / `/app/<应用名>-<壳>.apk`）
+// 两个壳共用同一条规则，只是壳标记不同：`-qh` / `-lt`。
+//
+// **壳标记不是装饰**：两个壳的应用名都是用户各自填的，重名（都叫「电视」）时
+// 不带标记就会解析到同一个文件 —— 下载页两个按钮给同一个包，"线上包是谁的"说不清。
+func shellDownloadOf(name, shell, version string) shellDownload {
 	if strings.TrimSpace(name) == "" {
 		return shellDownload{}
 	}
-	if until.GetFileSize("/config/app/"+name+".apk") == "0 MB" {
+	if until.GetFileSize(until.ClientApkPathOf(name, shell, false)) == "0 MB" {
 		return shellDownload{}
 	}
 	return shellDownload{
 		Show: true,
-		Name: name + "-" + version + ".apk",
-		Url:  "/app/" + name + ".apk",
+		Name: until.ClientApkSaveName(name, shell, version),
+		Url:  until.ClientApkURLOf(name, shell, false),
 	}
 }
 

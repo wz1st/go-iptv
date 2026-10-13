@@ -100,8 +100,8 @@ func ClientData(c *gin.Context) {
 
 	// 线上包 / 待发布包各四件：版本号、大小、MD5、下载地址。
 	// 两张卡片都用这套字段渲染，编译状态由同一份数据（GetBuildStatus）在轮询里刷新。
-	official := bootstrap.OfficialAPKPath(cfg.Build.Name)
-	staged := bootstrap.StagedAPKPath(cfg.Build.Name)
+	official := until.ClientApkPath(cfg.Build.Name, false)
+	staged := until.ClientApkPath(cfg.Build.Name, true)
 
 	pageData := dto.AdminClientDto{
 		Title:       "客户端设置",
@@ -109,15 +109,15 @@ func ClientData(c *gin.Context) {
 		Build:       cfg.Build,
 		App:         cfg.App,
 		Tips:        cfg.Tips,
-		ApkUrl:      "/app/" + cfg.Build.Name + ".apk",
-		ApkName:     bootstrap.APKDownloadName(cfg.Build.Name, cfg.Build.Version),
+		ApkUrl:      until.ClientApkURL(cfg.Build.Name, false),
+		ApkName:     until.ClientApkSaveName(cfg.Build.Name, until.ShellQh, cfg.Build.Version),
 		UpSize:      until.GetFileSize(official),
 		ApkMd5:      until.Md5File(official),
 		NewVersion:  cfg.Build.NewVersion,
 		NewSize:     until.GetFileSize(staged),
 		NewMd5:      until.Md5File(staged),
-		NewApkUrl:   "/app/" + cfg.Build.Name + "-new.apk",
-		NewApkName:  bootstrap.APKDownloadName(cfg.Build.Name, cfg.Build.NewVersion),
+		NewApkUrl:   until.ClientApkURL(cfg.Build.Name, true),
+		NewApkName:  until.ClientApkSaveName(cfg.Build.Name, until.ShellQh, cfg.Build.NewVersion),
 		NewExists:   until.Exists(staged),
 		BuildStatus: bootstrap.GetBuildStatus(),
 	}
@@ -140,8 +140,8 @@ func LuotuoData(c *gin.Context) {
 	}
 	cfg := dao.GetConfig()
 
-	official := bootstrap.OfficialAPKPath(cfg.BuildLt.Name)
-	staged := bootstrap.StagedAPKPath(cfg.BuildLt.Name)
+	official := until.ClientLtApkPath(cfg.BuildLt.Name, false)
+	staged := until.ClientLtApkPath(cfg.BuildLt.Name, true)
 
 	pageData := dto.AdminClientDto{
 		Title:       "骆驼壳客户端设置",
@@ -149,17 +149,17 @@ func LuotuoData(c *gin.Context) {
 		Build:       cfg.BuildLt,
 		App:         cfg.App,
 		Tips:        cfg.Tips,
-		ApkUrl:      "/app/" + cfg.BuildLt.Name + ".apk",
-		ApkName:     bootstrap.APKDownloadName(cfg.BuildLt.Name, cfg.BuildLt.Version),
+		ApkUrl:      until.ClientLtApkURL(cfg.BuildLt.Name, false),
+		ApkName:     until.ClientApkSaveName(cfg.BuildLt.Name, until.ShellLt, cfg.BuildLt.Version),
 		UpSize:      until.GetFileSize(official),
 		ApkMd5:      until.Md5File(official),
 		NewVersion:  cfg.BuildLt.NewVersion,
 		NewSize:     until.GetFileSize(staged),
 		NewMd5:      until.Md5File(staged),
-		NewApkUrl:   "/app/" + cfg.BuildLt.Name + "-new.apk",
-		NewApkName:  bootstrap.APKDownloadName(cfg.BuildLt.Name, cfg.BuildLt.NewVersion),
+		NewApkUrl:   until.ClientLtApkURL(cfg.BuildLt.Name, true),
+		NewApkName:  until.ClientApkSaveName(cfg.BuildLt.Name, until.ShellLt, cfg.BuildLt.NewVersion),
 		NewExists:   until.Exists(staged),
-		BuildStatus: bootstrap.GetBuildStatus(),
+		BuildStatus: bootstrap.GetBuildStatusLt(),
 	}
 
 	if until.Exists("/config/images/icon/icon.png") {

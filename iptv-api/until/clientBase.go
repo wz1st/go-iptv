@@ -104,14 +104,68 @@ func SetClientPublishedBase(base string) error {
 	return WriteFileAtomic(PubClientBaseFile(), base+"\n", 0644)
 }
 
-// ClientApkPath 返回客户端产物在持久卷里的路径。
-// staged=true 取待发布包（编译产物），false 取线上包。
-func ClientApkPath(name string, staged bool) string {
-	suffix := ".apk"
+// 两个客户端壳的**文件名标记**。产物、下载地址、浏览器存盘名一律按
+// `<应用名>-<壳>[-new][-<版本>].apk` 拼 —— 与 MyTV 早就在用的
+// `<名>-mytv.apk` / `<名>-mytv-new.apk` 是同一套形状。
+//
+// 为什么**必须**带壳标记：两个壳的「应用名」是用户在后台各自填的，没有任何约束
+// 保证不重名（都叫「电视」是常态）。不带标记时两个壳的产物在 /config/app 下就是
+// 同一个文件 —— 后编的壳直接覆盖先编的，下载页两个按钮指向同一个包，
+// 而"线上那个包到底是哪个壳的"再也说不清。编译与下载各自独立这条承诺，
+// 只有文件名分开才真正成立。
+const (
+	ShellQh = "qh" // 清和壳：基底 client/Client.apk（包名 xyz.qingh.qhtv）
+	ShellLt = "lt" // 骆驼壳：基底 client/Client_lt.apk（包名 cn.dsmtv.player）
+)
+
+// ClientApkFileName 是产物的**落盘文件名**（也是 /app 静态目录下的对外文件名）：
+// `<应用名>-<壳>.apk`，待发布包为 `<应用名>-<壳>-new.apk`。
+func ClientApkFileName(name, shell string, staged bool) string {
+	suffix := "-" + shell + ".apk"
 	if staged {
-		suffix = "-new.apk"
+		suffix = "-" + shell + "-new.apk"
 	}
-	return filepath.Join("/config/app", name+suffix)
+	return name + suffix
+}
+
+// ClientApkSaveName 是浏览器**存盘**用的文件名：`<应用名>-<壳>[-<版本>].apk`。
+//
+// 与落盘名刻意不同（多带版本号，方便用户区分先后），但**壳标记必须一致** ——
+// 否则两个壳在用户本地又变回同名文件。
+func ClientApkSaveName(name, shell, version string) string {
+	if version == "" {
+		return name + "-" + shell + ".apk"
+	}
+	return name + "-" + shell + "-" + version + ".apk"
+}
+
+// ClientApkURL / ClientLtApkURL 是产物的对外下载路径（路由把 /app 映射到 /config/app）。
+func ClientApkURL(name string, staged bool) string {
+	return "/app/" + ClientApkFileName(name, ShellQh, staged)
+}
+
+func ClientLtApkURL(name string, staged bool) string {
+	return "/app/" + ClientApkFileName(name, ShellLt, staged)
+}
+
+// ClientApkPathOf / ClientApkURLOf 是上面四个的通用形式：壳标记是**变量**时用
+// （例如公开下载页要按同一个函数拼两个壳的项）。
+func ClientApkPathOf(name, shell string, staged bool) string {
+	return filepath.Join("/config/app", ClientApkFileName(name, shell, staged))
+}
+
+func ClientApkURLOf(name, shell string, staged bool) string {
+	return "/app/" + ClientApkFileName(name, shell, staged)
+}
+
+// ClientApkPath 返回**清和壳**产物在持久卷里的路径。
+// staged=true 取待发布包（编译产物），false 取线上包。
+//
+// 这里是文件名的**唯一定义处**：编译侧（bootstrap.BuildAPK）与发布/轮询侧
+// （service.ClientApkInfo）都调它，不再各自拼字符串 —— 两边一旦分叉，
+// 症状是"编译成功但发布说包不存在"，每一步的返回值看上去都正常。
+func ClientApkPath(name string, staged bool) string {
+	return ClientApkPathOf(name, ShellQh, staged)
 }
 
 // IsApkName 判断文件名是不是一个 APK（上传接口用）。
@@ -176,9 +230,6 @@ const (
 	clientLtVersionAsset = "Version_client_lt"
 )
 
-// ClientLtName 是骆驼壳编译产物的固定文件名（不含 .apk）。
-const ClientLtName = "Client_lt"
-
 // PubClientLtBaseFile 记录"线上骆驼壳包编译时所用的基底版本"。
 func PubClientLtBaseFile() string { return ClientUserDir + "/PubBase_lt" }
 
@@ -221,12 +272,17 @@ func SetClientPublishedLtBase(base string) error {
 }
 
 // ClientLtApkPath 返回骆驼壳产物在持久卷里的路径。staged=true 取待发布包。
-func ClientLtApkPath(staged bool) string {
-	suffix := ".apk"
-	if staged {
-		suffix = "-new.apk"
-	}
-	return filepath.Join("/config/app", ClientLtName+suffix)
+//
+// 文件名取 cfg.BuildLt.Name（后台「应用名」）+ `-lt` 标记，与清和壳的
+// ClientApkPath 同口径（同走 ClientApkFileName）—— 编译侧 BuildLuotuoAPK
+// 落的就是它，两边必须是同一个名字。
+//
+// 早先这里硬编码常量 "Client_lt"：只要应用名不是 Client_lt（那是常态，例如
+// 「骆驼电视」），就会编译成功却**发布不了** —— 产物落在
+// /config/app/骆驼电视-new.apk，而发布去找 /config/app/Client_lt-new.apk，
+// 报「待发布的安装包不存在」；轮询那张卡片也一并读成 0 MB / 未编译。
+func ClientLtApkPath(name string, staged bool) string {
+	return ClientApkPathOf(name, ShellLt, staged)
 }
 
 // ClientLtFactoryPackage 返回镜像出厂骆驼壳基包（/app/client/Client_lt.apk）的包名。

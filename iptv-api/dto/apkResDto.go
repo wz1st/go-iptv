@@ -92,6 +92,14 @@ type DataReqDto struct {
 	Model    string `json:"model"`
 	Region   string `json:"region"`
 	Rand     string `json:"rand"`
+	// AppName 是客户端上报的**自己的应用显示名**（ez 壳 `SplashActivity.l()` 里
+	// `"appname"` ← `getApplicationLabel()`，每次都随频道请求一起发）。
+	//
+	// 服务端必须据此判断调用方是哪个壳：频道载荷要用**该壳自己的密钥**加密
+	// （见 service.GetChannels），而两个壳的密钥不同（应用名 + 包名一起进公式）。
+	// 为什么不靠路由判：骆驼壳请求的是登录下发给它的 dataurl，线上线下都存在
+	// `/apk/channels`（不带 `/lt`）的包，光看路径分不出调用方。
+	AppName string `json:"appname"`
 }
 type Program struct {
 	Name      string `json:"name"`

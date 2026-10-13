@@ -5,7 +5,6 @@ import (
 	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
-	"iptv-api/bootstrap"
 	"iptv-api/dao"
 	"iptv-api/dto"
 	"iptv-api/models"
@@ -41,17 +40,17 @@ func Getver(base string) dto.GetverRes {
 	res.AppVer = until.FormatClientVersion(until.ClientPublishedBase(), cfg.Build.Version)
 	res.UpSets = cfg.App.Update.Set
 	res.UpText = until.FixedUpdateText
-	res.AppURL = base + "/app/" + cfg.Build.Name + ".apk"
+	res.AppURL = base + until.ClientApkURL(cfg.Build.Name, false)
 	// 路径必须是**线上包的真实落点** `/config/app/...`。
 	// 原来写的是相对路径 `./app/...`，运行目录是 `/app` 而包在持久卷 `/config/app/`，
 	// os.Stat 必然失败 ⇒ GetFileSize 恒返回 "0 MB"，客户端更新弹窗里的包大小一直是 0。
 	// 这正是 SiteIndexData 用来判断"APK 是否存在"的同一个判据（!= "0 MB"）。
-	res.UpSize = until.GetFileSize(bootstrap.OfficialAPKPath(cfg.Build.Name))
+	res.UpSize = until.GetFileSize(until.ClientApkPath(cfg.Build.Name, false))
 	return res
 }
 
 // GetverLt 取「骆驼壳」客户端版本信息。口径与 Getver 完全一致，只是基底取
-// ClientPublishedLtBase、版本号拼 cfg.BuildLt、下载地址指向 /app/Client_lt.apk。
+// ClientPublishedLtBase、版本号拼 cfg.BuildLt、下载地址指向骆驼壳自己那个包。
 //
 // 骆驼壳 apk 在 getver 请求里带 `?shell=lt`（见 client/smali g$3.smali 的改写），
 // api 层据此路由到本函数 —— 两套壳共用同一个 Getver 入口，只按 shell 分流。
@@ -64,8 +63,8 @@ func GetverLt(base string) dto.GetverRes {
 	res.AppVer = until.FormatClientVersion(until.ClientPublishedLtBase(), cfg.BuildLt.Version)
 	res.UpSets = cfg.App.Update.Set
 	res.UpText = until.FixedUpdateText
-	res.AppURL = base + "/app/" + cfg.BuildLt.Name + ".apk"
-	res.UpSize = until.GetFileSize(bootstrap.OfficialAPKPath(cfg.BuildLt.Name))
+	res.AppURL = base + until.ClientLtApkURL(cfg.BuildLt.Name, false)
+	res.UpSize = until.GetFileSize(until.ClientLtApkPath(cfg.BuildLt.Name, false))
 	return res
 }
 
@@ -123,7 +122,7 @@ func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
 	result.BuffTimeOut = cfg.App.BuffTimeout
 	result.TipLoading = cfg.Tips.Loading
 	result.DataURL = base + "/apk/channels"
-	result.AppURL = base + "/app/" + cfg.Build.Name + ".apk"
+	result.AppURL = base + until.ClientApkURL(cfg.Build.Name, false)
 	result.ShowTime = cfg.Ad.ShowTime
 	result.TipUserNoReg = "当前账号 " + user.Name + " " + cfg.Tips.UserNoReg
 	result.TipUserExpired = "当前账号 " + user.Name + " " + cfg.Tips.UserExpired
@@ -137,14 +136,38 @@ func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
 	return getUserInfo(user, result)
 }
 
+// IsLuotuoAppName 判断客户端上报的应用显示名是不是**骆驼壳**的。
+//
+// 应用名是登录密钥派生公式的输入之一（until.AesKeyOf 的 E），而服务端把
+// cfg.BuildLt.Name 注入进骆驼壳包（bootstrap.BuildLuotuoAPK 的 AppName），
+// 所以两者恒等 —— 只要用户没把两个壳的应用名配成同一个（那本来也无法区分）。
+func IsLuotuoAppName(appName string) bool {
+	name := strings.TrimSpace(appName)
+	if name == "" {
+		return false
+	}
+	return name == dao.GetConfig().BuildLt.Name
+}
+
 // GetChannels 取 APK 客户端的频道列表。
+//
+// lt 为 true 时用**骆驼壳**的密钥加密载荷：两个壳的应用名与包名都不同，密钥
+// 随之不同（until.GetAesKey / GetAesKeyLt），客户端各用自己那份去解。用错一边
+// 的表现是「登录正常、频道列表永远空」—— 解密失败不会报错，只是解出乱码。
 //
 // 不再预置「我的收藏」分组：该分组原由服务端硬编码下发明文，
 // 两个壳（清和壳/骆驼壳）都据此渲染收藏入口。按需求隐藏收藏功能后，
 // 这里直接不再下发该分组 —— apk 侧对分组名做 `.equals("我的收藏")` 判断，
 // 收不到就永远走不到收藏分支（不会崩，只是收藏入口消失）。
 // 收藏本身是 apk 本地库的行为，服务端不下发展示分组即视为"隐藏"。
-func GetChannels(channel dto.DataReqDto, base string) string {
+func GetChannels(channel dto.DataReqDto, base string, lt bool) string {
+	// 载荷密钥：按壳取。放在最前面算一次，两条返回路径（"该套餐无频道"与正常列表）
+	// 都用同一把 —— 漏改任一条，那种情况下的客户端就永远解不开。
+	appKey := until.GetAesKey()
+	if lt {
+		appKey = until.GetAesKeyLt()
+	}
+
 	resList := []dto.ChannelListDto{}
 
 	var dbUser models.IptvUser
@@ -176,7 +199,7 @@ func GetChannels(channel dto.DataReqDto, base string) string {
 
 		jsonData, _ := json.Marshal(resList)
 		jsonStr := until.DecodeUnicode(string(jsonData))
-		return encrypt(jsonStr, channel.Rand)
+		return encrypt(jsonStr, channel.Rand, appKey)
 	}
 
 	var categoryList []models.IptvCategory
@@ -248,15 +271,20 @@ func GetChannels(channel dto.DataReqDto, base string) string {
 	jsonData, _ := json.Marshal(resList)
 	jsonStr := until.DecodeUnicode(string(jsonData))
 
-	return encrypt(jsonStr, channel.Rand)
+	return encrypt(jsonStr, channel.Rand, appKey)
 }
 
-func encrypt(str string, randkey string) string {
+// encrypt 把频道 JSON 编成客户端能解的载荷。
+//
+// appKey 是**调用方那个壳的登录密钥**（until.GetAesKey / GetAesKeyLt），由调用处
+// 按壳选好传进来 —— 早先这里自己读 until.GetAesKey()，于是骆驼壳拿到的载荷是用
+// 清和壳的密钥加的，客户端按自己的 F 去解只能得到乱码（表现为"频道列表为空"）。
+func encrypt(str string, randkey string, appKey string) string {
 	encoded, _ := CompressString(str)
 
 	// Step 2: MD5 加密 key
 
-	hashedKey := until.Md5(until.GetAesKey() + randkey)
+	hashedKey := until.Md5(appKey + randkey)
 
 	// Step 3: 截取 hashedKey 的一部分
 	subKey := hashedKey[7:23]
