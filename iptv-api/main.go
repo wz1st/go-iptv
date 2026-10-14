@@ -158,7 +158,7 @@ func main() {
 			// GetConfig 在配置未就绪时返回 nil，取字段前先判空
 			if cfg := dao.GetConfig(); cfg == nil {
 				log.Println("配置未就绪，跳过启动编译")
-			} else if apkPath := bootstrap.OfficialAPKPath(cfg.Build.Name); until.Exists(apkPath) {
+			} else if apkPath := until.ClientApkPath(cfg.Build.Name, false); until.Exists(apkPath) {
 				log.Println("已存在编译好的APK，跳过编译")
 			} else {
 				go bootstrap.BuildAPK(false)

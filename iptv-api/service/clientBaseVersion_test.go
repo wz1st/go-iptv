@@ -141,8 +141,11 @@ func TestGetverPublishesFullVersion(t *testing.T) {
 // 抓回退：包大小必须读线上包的真实落点 /config/app/，不是相对路径 ./app/。
 func TestGetverReadsOfficialApkSize(t *testing.T) {
 	src := srcOf(t, "apkService.go")
-	if !strings.Contains(src, "bootstrap.OfficialAPKPath(cfg.Build.Name)") {
-		t.Fatal("Getver 的包大小未走 bootstrap.OfficialAPKPath")
+	// 落点口径现在**只有一处定义**（until.ClientApkFileName / ClientApkPath），
+	// 原先 bootstrap.OfficialAPKPath 那份已经删掉 —— 两份实现是"编译成功、
+	// 发布找不到包"那类事故的温床。这里钉住的是"必须走 until 那条口径"。
+	if !strings.Contains(src, "until.ClientApkPath(cfg.Build.Name, false)") {
+		t.Fatal("Getver 的包大小未走 until.ClientApkPath —— 落点口径必须与编译侧同一个函数")
 	}
 	if strings.Contains(src, `GetFileSize("./app/"`) {
 		t.Fatal("Getver 仍在读相对路径 ./app/ —— 运行目录是 /app 而包在 /config/app/，恒返回 0 MB")

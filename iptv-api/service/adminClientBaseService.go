@@ -24,7 +24,14 @@ import (
 
 // bootstrapStatus 是编译状态的读取口，单独一个函数是为了让本文件不必
 // 在每个判断处都写一长串 bootstrap.GetBuildStatus()。
+//
+// **这是清和壳的那一份**。骆驼壳有独立的 bootstrapStatusLt() —— 两个壳的编译
+// 状态刻意不共用（见 bootstrap/build.go 的注释）：共用会让"编骆驼壳"把清和壳的
+// 页面也置成「正在打包中」，并让两边互相拒绝发起编译。
 func bootstrapStatus() int64 { return bootstrap.GetBuildStatus() }
+
+// bootstrapStatusLt 是**骆驼壳**的编译状态读取口。
+func bootstrapStatusLt() int64 { return bootstrap.GetBuildStatusLt() }
 
 // ClientApkInfo 汇总「线上包」「待发布包」与基底信息，供取数与轮询共用。
 func ClientApkInfo() map[string]interface{} {
@@ -51,24 +58,16 @@ func ClientApkInfo() map[string]interface{} {
 		"version": curVersion,
 		"size":    until.GetFileSize(official),
 		"md5":     until.Md5File(official),
-		"url":     "/app/" + cfg.Build.Name + ".apk",
-		"name":    apkDownloadName(cfg.Build.Name, curVersion),
+		"url":     until.ClientApkURL(cfg.Build.Name, false),
+		"name":    until.ClientApkSaveName(cfg.Build.Name, until.ShellQh, curVersion),
 		// ---- 待发布包 ----
 		"newVersion": newVersion,
 		"newSize":    until.GetFileSize(staged),
 		"newMd5":     until.Md5File(staged),
 		"newExists":  until.Exists(staged),
-		"newName":    apkDownloadName(cfg.Build.Name, newVersion),
-		"newUrl":     "/app/" + cfg.Build.Name + "-new.apk",
+		"newName":    until.ClientApkSaveName(cfg.Build.Name, until.ShellQh, newVersion),
+		"newUrl":     until.ClientApkURL(cfg.Build.Name, true),
 	}
-}
-
-// apkDownloadName 是浏览器存盘用的文件名，与真实文件路径**刻意不同**。
-func apkDownloadName(name, version string) string {
-	if version == "" {
-		return name + ".apk"
-	}
-	return name + "-" + version + ".apk"
 }
 
 // UploadClientBase 上传 / 替换客户端的「编译基底」APK。

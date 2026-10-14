@@ -2,6 +2,7 @@ package service
 
 import (
 	"iptv-api/dao"
+	"iptv-api/dto"
 	"iptv-api/models"
 	"iptv-api/until"
 	"log"
@@ -44,7 +45,9 @@ func SaveUser(user models.IptvUser) models.IptvUser {
 	var dbUser models.IptvUser
 	res := dao.DB.Where("device_id = ?", user.DeviceID).First(&dbUser)
 	if res.RowsAffected == 0 {
-		user.Name = int64(genName())
+		// 账号直接用 device_id —— mytv 本来就以 device_id 查用户，
+		// 拿它当账号比随机数更好认。取不到才退回随机数（与 apk 侧同一套逻辑）。
+		user.Name = genName(dto.ApkUser{DeviceID: user.DeviceID})
 		var cfg = dao.GetConfig()
 		switch cfg.App.NeedAuthor {
 		case 0:

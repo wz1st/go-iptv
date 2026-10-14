@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"iptv-api/dao"
 	"iptv-api/dto"
 	"iptv-api/service"
 	"iptv-api/until"
@@ -41,7 +42,9 @@ func ApkLogin(c *gin.Context) {
 
 	ip := c.ClientIP() //获取ip
 
-	if strings.Contains(user.Mac, "获取地址失败") {
+	// 取不到 MAC 的设备，登录时把 mac 回落成 androidid 建了账号。
+	// 两种非正常 mac 都要能回落：失败提示串（老客户端）与空串。
+	if strings.Contains(user.Mac, "获取地址失败") || user.Mac == "" {
 		user.Mac = user.DeviceID
 	}
 
@@ -64,6 +67,25 @@ func ApkLogin(c *gin.Context) {
 		shell = until.ShellLt
 	}
 	result := service.ApkLogin(dbUser, adminBase(c), shell)
+
+	// 骆驼壳的「应用下载地址 / 版本」必须用它自己那一套（cfg.BuildLt.*）：
+	// service.ApkLogin 里那两行按清和壳（cfg.Build.*）拼，直接下发会让骆驼壳
+	// 拿到清和壳那个包。与 GetverLt 的口径必须一致 —— 否则同一个
+	// 壳从 /login 与 /getver 拿到的"该下哪个包"是两个答案。
+	//
+	// 现状说明（2026-10-13 实测）：本壳把这两个字段**只写不读**
+	// （client/smali 的 SplashActivity->j/->b 只有 sput，没有 sget），
+	// 升级实际走 /apk/lt/getver（g$3.smali 写 g->g/g->f），那条是对的 ——
+	// 所以这是"今天无害、但契约错"的值，仍然修掉，免得壳子哪天读起来就装错包。
+	if isLuotuoShell(c) {
+		cfg := dao.GetConfig()
+		result.AppVer = cfg.BuildLt.Version
+		result.AppURL = adminBase(c) + until.ClientLtApkURL(cfg.BuildLt.Name, false)
+		// 频道接口也走骆驼壳自己的前缀，与 /apk/lt/* 其它接口同源；
+		// 顺带让"按路由判壳"这条兜底判据在频道这条路上也成立
+		// （真正决定密钥的是请求体里的 appname，见 api.GetChannels）。
+		result.DataURL = adminBase(c) + "/apk/lt/channels"
+	}
 
 	resObj, _ := json.Marshal(result)
 
@@ -94,13 +116,24 @@ func Getver(c *gin.Context) {
 }
 
 func GetBg(c *gin.Context) {
-	imgName := service.GetBg()
+	// 背景图池按壳分（清和壳 /config/images/bj、骆驼壳 /config/images/lt/bj），
+	// 分流判据与登录/getver 完全一致（见 isLuotuoShell）—— 骆驼壳的 SplashActivity
+	// 会拿这个地址下载启动背景并缓存成 filesDir/ez_bg.png。
+	shell := until.ShellQh
+	if isLuotuoShell(c) {
+		shell = until.ShellLt
+	}
+	imgName := service.GetBg(shell)
 	if imgName == "" {
 		c.String(http.StatusOK, "")
 		return
 	}
+	// 前缀按壳取，且**不再**拼 "/images/bj/"：/images/ 的 alias 已经指向 bj 目录
+	// 本身，多一层是 /config/images/bj/bj/xxx.png —— 404，而客户端把取图失败
+	// 静默吞掉，表现只是"背景一直是包内默认图"，极难定位。
+	//
 	// 同 ApkLogin：按请求基址拼，站点上 HTTPS 后不给客户端发明文地址。
-	c.String(http.StatusOK, adminBase(c)+"/images/bj/"+imgName)
+	c.String(http.StatusOK, adminBase(c)+until.ClientBgURLPrefix(shell)+imgName)
 }
 
 func GetChannels(c *gin.Context) {
@@ -121,7 +154,13 @@ func GetChannels(c *gin.Context) {
 	// base 只影响 purl（中转地址）。取不到合法 Host 时传空串，
 	// service 那边会退化成下发源地址，而不是下发一条空 URL。
 	base, _ := clientBase(c)
-	result := service.GetChannels(channel, base)
+	// 载荷密钥按壳选。判据**优先看请求体里的 appname** —— 骆驼壳请求的是登录
+	// 下发给它的 dataurl，而现役/历史包都可能落在 `/apk/channels`（不带 /lt），
+	// 光看路径分不出调用方；appname 就是它自己的应用显示名（smali 里
+	// `"appname"` ← getApplicationLabel()），与服务端 cfg.BuildLt.Name 同源。
+	// 没带 appname 时回落路由判据（/apk/lt/ 前缀或 ?shell=lt）。
+	lt := service.IsLuotuoAppName(channel.AppName) || isLuotuoShell(c)
+	result := service.GetChannels(channel, base, lt)
 
 	c.String(http.StatusOK, result)
 }

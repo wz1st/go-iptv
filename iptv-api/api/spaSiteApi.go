@@ -30,9 +30,6 @@ func SiteBootData(c *gin.Context) {
 		"lic_logged": licLogged(),
 		"author":     cfgAuthor(),
 		"installed":  bootstrap.IsInstalled(),
-		// lic_type：授权等级。4 = 定制授权 —— 前端据此决定是否显示
-		// 「下载页编辑」与「定制APK」这两个入口（见 utils/site.js 的 isCustom）。
-		"lic_type": dao.GetLic().Type,
 	})
 }
 
@@ -69,30 +66,20 @@ func SiteIndexData(c *gin.Context) {
 
 	cfg := dao.GetConfig()
 
-	// 默认下载页的按钮开关（配在 /config/custom.yml，定制授权专属）。
-	// 非定制授权读不到那份文件 ⇒ 开关都是 true，行为与改造前一致。
-	// 这里的"显示"是**开关 && APK 已编译**：文件不存在时按钮点了也是 404，
-	// 所以开关只负责"关"，不负责"无中生有"。
-	swCamel, swQh, swMytv, swCustom, swAdmin, customApkName := dao.CustomDlSwitches()
-	pageData.ShowAdmin = swAdmin
+	// 两个壳各出各的按钮。**主槽位是骆驼壳**（smali 树那套），所以它占用
+	// 改造前的 `apk_*` 字段；清和壳用 `apk_qh_*`（见 dto.IndexDto 的说明）。
+	lt := shellDownloadOf(cfg.BuildLt.Name, until.ShellLt, cfg.BuildLt.Version)
+	qh := shellDownloadOf(cfg.Build.Name, until.ShellQh, cfg.Build.Version)
+	pageData.ShowDown = lt.Show
+	pageData.ApkName = lt.Name
+	pageData.ApkLabel = lt.Label
+	pageData.ApkUrl = lt.Url
+	pageData.ShowDownQh = qh.Show
+	pageData.ApkQhName = qh.Name
+	pageData.ApkQhLabel = qh.Label
+	pageData.ApkQhUrl = qh.Url
 
-	// 两个客户端壳各出各的按钮。**主槽位是骆驼壳**，所以它占用改造前的
-	// `apk_*` 字段（开关也沿用 camel 那条 —— 名字本来就是骆驼）；清和壳用
-	// `apk_qh_*`（见 dto.IndexDto 的说明）。
-	lt := shellDownloadOf(cfg.BuildLt.Name, cfg.BuildLt.Version)
-	qh := shellDownloadOf(cfg.Build.Name, cfg.Build.Version)
-	if swCamel {
-		pageData.ShowDown = lt.Show
-		pageData.ApkName = lt.Name
-		pageData.ApkUrl = lt.Url
-	}
-	if swQh {
-		pageData.ShowDownQh = qh.Show
-		pageData.ApkQhName = qh.Name
-		pageData.ApkQhUrl = qh.Url
-	}
-
-	if swMytv && until.GetFileSize("/config/app/"+cfg.Site.MytvNameOr()+"-mytv.apk") != "0 MB" {
+	if until.GetFileSize("/config/app/"+cfg.Site.MytvNameOr()+"-mytv.apk") != "0 MB" {
 		pageData.ShowDownMyTV = true
 		// 文件名带真实版本「底包版本.编译号」—— 改造前硬编码 "1.2.0."，
 		// 底包升到 1.2.2 后下载文件名与包内版本就对不上了。
@@ -106,41 +93,32 @@ func SiteIndexData(c *gin.Context) {
 		pageData.MyTVUrl = "/app/" + cfg.Site.MytvNameOr() + "-mytv.apk"
 	}
 
-	// 定制客户端：只在定制授权（Type == 4）下才可能出现产物。名字与产物的取名规则
-	// 与引擎逐字对齐（见 dao.CustomDlSwitches 的兜底），产物文件名不带版本号
-	// （见引擎 customApkService.go 的 customApkOfficialSuffix）。
-	if dao.IsCustomLic() {
-		if swCustom && until.GetFileSize("/config/app/"+customApkName+"-custom.apk") != "0 MB" {
-			pageData.ShowDownCustom = true
-			pageData.CustomName = customApkName + "-custom.apk"
-			pageData.CustomUrl = "/app/" + customApkName + "-custom.apk"
-		}
-	}
-
 	c.JSON(200, gin.H{
-		"installed":        true,
-		"site_name":        SiteName,
-		"show_down":        pageData.ShowDown,
-		"apk_name":         pageData.ApkName,
-		"apk_url":          pageData.ApkUrl,
-		"show_down_qh":     pageData.ShowDownQh,
-		"apk_qh_name":      pageData.ApkQhName,
-		"apk_qh_url":       pageData.ApkQhUrl,
-		"show_down_mytv":   pageData.ShowDownMyTV,
-		"mytv_name":        pageData.MyTVName,
-		"mytv_url":         pageData.MyTVUrl,
-		"show_down_custom": pageData.ShowDownCustom,
-		"custom_name":      pageData.CustomName,
-		"custom_url":       pageData.CustomUrl,
-		"show_admin":       pageData.ShowAdmin,
+		"installed":      true,
+		"site_name":      SiteName,
+		"show_down":      pageData.ShowDown,
+		"apk_name":       pageData.ApkName,
+		"apk_label":      pageData.ApkLabel,
+		"apk_url":        pageData.ApkUrl,
+		"show_down_qh":   pageData.ShowDownQh,
+		"apk_qh_name":    pageData.ApkQhName,
+		"apk_qh_label":   pageData.ApkQhLabel,
+		"apk_qh_url":     pageData.ApkQhUrl,
+		"show_down_mytv": pageData.ShowDownMyTV,
+		"mytv_name":      pageData.MyTVName,
+		"mytv_url":       pageData.MyTVUrl,
 	})
 }
 
 // shellDownload 是下载页上「一个壳」的下载项。
 type shellDownload struct {
 	Show bool
-	Name string // 浏览器存盘用的文件名（含版本号）
+	Name string // 浏览器存盘用的文件名（含壳标记与版本号）
 	Url  string // 真实下载地址
+	// Label 是按钮上的**文案**：同样带版本号，但**不带壳标记**（见
+	// until.ClientApkLabel）。按钮分组与「（清和壳）」后缀已经把壳说清楚了，
+	// 再把 `-qh` / `-lt` 摆到文案上是把内部命名泄漏给用户。
+	Label string
 }
 
 // shellDownloadOf 组装一个壳的下载项；产物不存在时 Show 为 false。
@@ -149,19 +127,23 @@ type shellDownload struct {
 // 或者换了基底还没重编，这三种情况下配置里说得出名字，但盘上没有可下载的包 ——
 // 让按钮显示出来只会给用户一个 404。
 //
-// 名字与地址的拼法（`<应用名>-<版本>.apk` / `/app/<应用名>.apk`）两个壳共用，
-// 与 bootstrap.APKDownloadName 同一形状：真实文件按应用名落盘，下载名额外带版本号。
-func shellDownloadOf(name, version string) shellDownload {
+// 名字与地址的拼法（`<应用名>-<壳>[-<版本>].apk` / `/app/<应用名>-<壳>.apk`）
+// 两个壳共用同一条规则，只是壳标记不同：`-qh` / `-lt`。
+//
+// **壳标记不是装饰**：两个壳的应用名都是用户各自填的，重名（都叫「电视」）时
+// 不带标记就会解析到同一个文件 —— 下载页两个按钮给同一个包，"线上包是谁的"说不清。
+func shellDownloadOf(name, shell, version string) shellDownload {
 	if strings.TrimSpace(name) == "" {
 		return shellDownload{}
 	}
-	if until.GetFileSize("/config/app/"+name+".apk") == "0 MB" {
+	if until.GetFileSize(until.ClientApkPathOf(name, shell, false)) == "0 MB" {
 		return shellDownload{}
 	}
 	return shellDownload{
-		Show: true,
-		Name: name + "-" + version + ".apk",
-		Url:  "/app/" + name + ".apk",
+		Show:  true,
+		Name:  until.ClientApkSaveName(name, shell, version),
+		Url:   until.ClientApkURLOf(name, shell, false),
+		Label: until.ClientApkLabel(name, version),
 	}
 }
 

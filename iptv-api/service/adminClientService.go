@@ -20,7 +20,14 @@ import (
 // 签名与「更新内容」都已写死在服务端（until.FixedAppSign / until.FixedUpdateText），
 // 请求体里带了也不采信 —— 否则等于「能调一次接口就能改签名」。
 
-func UploadFile(c *gin.Context, imgType string) dto.ReturnJsonDto {
+// UploadFile 保存上传的图标 / 背景图，**按壳落到各自的目录**（until.ClientIconDir /
+// until.ClientBgDir）。两个壳的素材互不影响，所以 shell 必须由调用方显式传进来，
+// 不从路径猜 —— 猜错的后果是"在骆驼壳后台上传的图进了清和壳的包"。
+//
+// 保存前先 MkdirAll：目录本来由安装流程创建（bootstrap.install），但**已装机的
+// 系统升级上来时不会再跑安装流程** —— 新加的骆驼壳那两套目录在存量机器上并不存在，
+// 少了这一句的表现就是"上传直接报保存失败"，而用户没有任何办法自己修。
+func UploadFile(c *gin.Context, imgType, shell string) dto.ReturnJsonDto {
 	if imgType == "icon" {
 		file, err := c.FormFile("iconfile")
 		if err != nil {
@@ -42,11 +49,16 @@ func UploadFile(c *gin.Context, imgType string) dto.ReturnJsonDto {
 			return dto.ReturnJsonDto{Code: 0, Msg: "只允许上传 PNG 文件", Type: "danger"}
 		}
 
-		dst := "/config/images/icon/icon.png"
+		if err := os.MkdirAll(until.ClientIconDir(shell), 0755); err != nil {
+			return dto.ReturnJsonDto{Code: 0, Msg: "保存文件失败:" + err.Error(), Type: "danger"}
+		}
+		dst := until.ClientIconFile(shell)
 		if err := c.SaveUploadedFile(file, dst); err != nil {
 			return dto.ReturnJsonDto{Code: 0, Msg: "保存文件失败:" + err.Error(), Type: "danger"}
 		}
-		return dto.ReturnJsonDto{Code: 1, Msg: "上传成功", Type: "success", Data: map[string]interface{}{"url": "/icon/icon.png"}}
+		// 预览地址按壳拼：两壳前缀不同（清和壳 /icon/、骆驼壳 /lt/icon/）。
+		return dto.ReturnJsonDto{Code: 1, Msg: "上传成功", Type: "success",
+			Data: map[string]interface{}{"url": until.ClientIconURLPrefix(shell) + "icon.png"}}
 	} else {
 		file, err := c.FormFile("bjfile")
 		if err != nil {
@@ -70,7 +82,10 @@ func UploadFile(c *gin.Context, imgType string) dto.ReturnJsonDto {
 
 		pngName := until.Md5(url.QueryEscape(fmt.Sprintf("%s%d", file.Filename, time.Now().Unix())))
 
-		dst := "/config/images/bj/" + pngName + ".png"
+		if err := os.MkdirAll(until.ClientBgDir(shell), 0755); err != nil {
+			return dto.ReturnJsonDto{Code: 0, Msg: "保存文件失败:" + err.Error(), Type: "danger"}
+		}
+		dst := until.ClientBgDir(shell) + "/" + pngName + ".png"
 		if err := c.SaveUploadedFile(file, dst); err != nil {
 			return dto.ReturnJsonDto{Code: 0, Msg: "保存文件失败:" + err.Error(), Type: "danger"}
 		}
@@ -78,10 +93,11 @@ func UploadFile(c *gin.Context, imgType string) dto.ReturnJsonDto {
 	}
 }
 
-func DeleteFile(req dto.ClientDeleteBjReq, imgType string) dto.ReturnJsonDto {
+// DeleteFile 删除**某个壳**的图标 / 指定背景图。壳由调用方显式传入。
+func DeleteFile(req dto.ClientDeleteBjReq, imgType, shell string) dto.ReturnJsonDto {
 	// iconFile := params.Get("iconfile")
 	if imgType == "icon" {
-		iconFile := "/config/images/icon/icon.png"
+		iconFile := until.ClientIconFile(shell)
 		if err := os.Remove(iconFile); err != nil {
 			return dto.ReturnJsonDto{Code: 0, Msg: "删除失败:" + err.Error(), Type: "danger"}
 		}
@@ -91,7 +107,7 @@ func DeleteFile(req dto.ClientDeleteBjReq, imgType string) dto.ReturnJsonDto {
 	if !until.IsSafeImgName(bjName) {
 		return dto.ReturnJsonDto{Code: 0, Msg: "文件名不合法", Type: "danger"}
 	}
-	bjFile := "/config/images/bj/" + bjName + ".png"
+	bjFile := until.ClientBgDir(shell) + "/" + bjName + ".png"
 	if err := os.Remove(bjFile); err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "删除失败", Type: "danger"}
 	}
@@ -281,9 +297,8 @@ func SetTipSet(req dto.ClientTipSetReq) dto.ReturnJsonDto {
 	return dto.ReturnJsonDto{Code: 1, Msg: "设置成功", Type: "success"}
 }
 
-// AdInfo 是后台配置的「广告内容」（config.yml 的 site.ad），没配过时给固定默认文案。
-// 这个值存在引擎侧的 Site.Ad 里 —— 引擎对非定制授权会在配置装载时把它重置回默认，
-// 所以那份配置天然只在定制授权下有"自定义"的含义。
+// AdInfo 读后台配置的「广告内容」，留空或未配置时回落到固定默认文案。
+// **custom 定制**。
 func AdInfo() string {
 	if cfg := dao.GetConfig(); cfg != nil {
 		if ad := strings.TrimSpace(cfg.Site.Ad); ad != "" {
@@ -293,9 +308,9 @@ func AdInfo() string {
 	return until.FixedAdInfo
 }
 
-// ApkAdInfo 是**下发给客户端**的广告内容（登录响应里的 qqinfo）。
-// 只有（仍然有效的）定制授权才用后台配置的自定义值：授权失效时引擎会把
-// License.Type 清成 0，这里随即回落到固定默认文案 —— 即"授权到期立即取消"。
+// ApkAdInfo 返回下发给客户端的「广告内容」（退出弹窗那行）——
+// **custom 定制**：非定制授权恒为作者博客；定制授权下才用后台配置的值。
+// 授权一旦失效（Type 清成 0）立刻回落默认，不会继续下发旧配置。
 func ApkAdInfo() string {
 	if !dao.IsCustomLic() {
 		return until.FixedAdInfo
@@ -305,7 +320,7 @@ func ApkAdInfo() string {
 
 // SetAdInfo 保存客户端退出弹窗里的「广告内容」。
 // 仅定制授权可改：非定制授权下这段文案本就该是作者博客，
-// 而且授权一旦失效（Type 清成 0）后台也就改不动了。
+// 而且授权一旦失效后台也就改不动了。
 func SetAdInfo(req dto.ClientAdInfoReq) dto.ReturnJsonDto {
 	if !dao.IsCustomLic() {
 		return dto.ReturnJsonDto{Code: 0, Msg: "该功能仅在定制授权下可用", Type: "danger"}
@@ -321,43 +336,14 @@ func SetAdInfo(req dto.ClientAdInfoReq) dto.ReturnJsonDto {
 
 // GetBuildStatus 返回编译进度，并把两张卡片要的数据一次给全。
 func GetBuildStatus() dto.ReturnJsonDto {
-	cfg := dao.GetConfig()
-	data := clientApkInfo(cfg)
-
 	if bootstrap.GetBuildStatus() == 1 {
-		return dto.ReturnJsonDto{Code: 0, Msg: "APK编译中...", Type: "info", Data: data}
+		return dto.ReturnJsonDto{Code: 0, Msg: "APK编译中...", Type: "info", Data: ClientApkInfo()}
 	}
-	return dto.ReturnJsonDto{Code: 1, Msg: "APK编译完成", Type: "success", Data: data}
+	return dto.ReturnJsonDto{Code: 1, Msg: "APK编译完成", Type: "success", Data: ClientApkInfo()}
 }
 
-// clientApkInfo 汇总「线上包」与「待发布包」两组信息，供取数与轮询共用。
-func clientApkInfo(cfg *dto.Config) map[string]interface{} {
-	official := bootstrap.OfficialAPKPath(cfg.Build.Name)
-	staged := bootstrap.StagedAPKPath(cfg.Build.Name)
-
-	return map[string]interface{}{
-		"status": bootstrap.GetBuildStatus(),
-		// ---- 编译基底（底包）----
-		// 前端基底卡片要显示这两个值，而 client/data 那条路径不带它们，
-		// 所以面板首屏单独取一次 buildStatus —— 这里必须发，否则徽章恒为「-」。
-		// （重构前这些字段在 service.ClientApkInfo 里，那函数现在已无人调用。）
-		"baseVersion": until.GetClientBaseVersion(),
-		"basePkg":     until.ClientFactoryPackage(),
-		"version":     cfg.Build.Version,
-		"size":        until.GetFileSize(official),
-		"md5":         until.Md5File(official),
-		"url":         "/app/" + cfg.Build.Name + ".apk",
-		"name":        bootstrap.APKDownloadName(cfg.Build.Name, cfg.Build.Version),
-		"newVersion":  cfg.Build.NewVersion,
-		"newSize":     until.GetFileSize(staged),
-		"newMd5":      until.Md5File(staged),
-		"newExists":   until.Exists(staged),
-		// newName 必须发：前端的「新版本」下载链接用它当 :download，
-		// 轮询时也要靠它把名字刷回来（只发 newUrl 的话名字会一直停在初值）。
-		"newName": bootstrap.APKDownloadName(cfg.Build.Name, cfg.Build.NewVersion),
-		"newUrl":  "/app/" + cfg.Build.Name + "-new.apk",
-	}
-}
+// clientApkInfo 已并入 ClientApkInfo（adminClientBaseService.go）——
+// 基底信息、线上/待发布两组卡片都在那里汇总，保留两份必然只改一边。
 
 // PublishAPK 把「待发布」的包提升成线上版本。
 func PublishAPK() dto.ReturnJsonDto {
@@ -370,22 +356,18 @@ func PublishAPK() dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "没有待发布的版本，请先编译", Type: "danger"}
 	}
 
-	staged := bootstrap.StagedAPKPath(cfg.Build.Name)
+	staged := until.ClientApkPath(cfg.Build.Name, true)
 	if !until.Exists(staged) {
 		return dto.ReturnJsonDto{Code: 0, Msg: "待发布的安装包不存在，请重新编译", Type: "danger"}
 	}
 
-	official := bootstrap.OfficialAPKPath(cfg.Build.Name)
+	official := until.ClientApkPath(cfg.Build.Name, false)
 	if err := os.Rename(staged, official); err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "发布失败:" + err.Error(), Type: "danger"}
 	}
 
 	// 先把「这版用的是哪版基底」记下来，再推进版本号：顺序反了而中间失败，
 	// 就会出现「版本号说 1.0.0.001、记录还写 1.0.0」的自相矛盾状态。
-	//
-	// 缺这段的后果：PubBase 永远不存在 ⇒ ClientPublishedBase() 恒等于
-	// GetClientBaseVersion() ⇒ 换过基底但还没重编时，**线上包**的版本号会
-	// 提前跳到新基底，与包里实际（旧基底编的）对不上。
 	pubBase := until.GetClientBaseVersion()
 	if err := until.SetClientPublishedBase(pubBase); err != nil {
 		log.Println("⚠️ 记录线上基底版本失败:", err)

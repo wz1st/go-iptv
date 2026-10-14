@@ -104,14 +104,182 @@ func SetClientPublishedBase(base string) error {
 	return WriteFileAtomic(PubClientBaseFile(), base+"\n", 0644)
 }
 
-// ClientApkPath 返回客户端产物在持久卷里的路径。
-// staged=true 取待发布包（编译产物），false 取线上包。
-func ClientApkPath(name string, staged bool) string {
-	suffix := ".apk"
-	if staged {
-		suffix = "-new.apk"
+// 两个客户端壳的**文件名标记**。产物、下载地址、浏览器存盘名一律按
+// `<应用名>-<壳>[-new][-<版本>].apk` 拼 —— 与 MyTV 早就在用的
+// `<名>-mytv.apk` / `<名>-mytv-new.apk` 是同一套形状。
+//
+// 为什么**必须**带壳标记：两个壳的「应用名」是用户在后台各自填的，没有任何约束
+// 保证不重名（都叫「电视」是常态）。不带标记时两个壳的产物在 /config/app 下就是
+// 同一个文件 —— 后编的壳直接覆盖先编的，下载页两个按钮指向同一个包，
+// 而"线上那个包到底是哪个壳的"再也说不清。编译与下载各自独立这条承诺，
+// 只有文件名分开才真正成立。
+const (
+	ShellQh = "qh" // 清和壳：基底 client/Client.apk（包名 xyz.qingh.qhtv）
+	ShellLt = "lt" // 骆驼壳：基底 client/Client_lt.apk（包名 xyz.qingh.lutuo）
+)
+
+// ============================================================================
+// 按壳分叉的「启动图素材」口径：上传目录 / 对外 URL 前缀 / 包内资源名
+//
+// 三样东西必须**成套**，而且必须按壳分。历史上有两处踩过：
+//
+//  1. 目录与 URL 只改一边 —— 后台上传成功但预览是裂图（或反过来：包里换了图，
+//     后台还显示旧图）。
+//  2. 包内资源名两壳写死成同一个 —— 见下。
+//
+// 包内资源名**不是**内部命名，是与各壳源码的逐字契约：
+//   - 清和壳（Kotlin 壳，源码 iptv-apk-rebuilt）SplashScreen.kt 读
+//     R.drawable.icon 与 R.drawable.qh_bg（旧 camel 命名 ez_bg 已改名）；
+//   - 骆驼壳（ez 壳）的启动背景是 styles.xml 里 android:windowBackground 指到的
+//     @drawable/ez_bg，图标同样叫 icon。它的基底里**根本没有 qh_bg**。
+//
+// 而 until/clientBuild.go 的 overlayImage **只覆盖已存在的同名文件**，名字对不上
+// 时返回错误 ⇒ 早期两壳共用 "qh_bg" 的写法，症状是「只要后台上传过一张背景图，
+// 骆驼壳就再也编不出来」（报错说基底里找不到 qh_bg.png，而那不是用户能理解的话）。
+// 所以背景资源名必须按壳取。
+// ============================================================================
+
+// 两壳包内的启动图资源名。
+const (
+	clientIconDrawable = "icon"  // 图标：两壳同名
+	clientQhBgDrawable = "qh_bg" // 清和壳启动背景
+	clientLtBgDrawable = "ez_bg" // 骆驼壳启动背景（ez 壳的既有命名，不改）
+)
+
+// ClientIconDrawable 返回某个壳包内要被替换掉的图标资源名。
+func ClientIconDrawable(_ string) string { return clientIconDrawable }
+
+// ClientBgDrawable 返回某个壳包内要被替换掉的启动背景资源名。
+func ClientBgDrawable(shell string) string {
+	if shell == ShellLt {
+		return clientLtBgDrawable
 	}
-	return filepath.Join("/config/app", name+suffix)
+	return clientQhBgDrawable
+}
+
+// 两壳各自的上传素材目录（持久卷 /config 下）。
+//
+// 清和壳刻意**留在历史路径**（/config/images 根）：线上已经有人传过图，换目录
+// 等于把用户已上传的素材丢掉；骆驼壳是新增的壳，没有历史包袱，整棵子树独立放在
+// /config/images/lt 下 —— 这就是「两个壳不共用同一套」的落点。
+const (
+	clientIconDirQh = "/config/images/icon"
+	clientBgDirQh   = "/config/images/bj"
+	clientIconDirLt = "/config/images/lt/icon"
+	clientBgDirLt   = "/config/images/lt/bj"
+
+	// URL 前缀与目录一一对应：清和壳 /icon/ 与 /images/，骆驼壳 /lt/icon/ 与
+	// /lt/images/。骆驼壳**不能**用 /images/lt/ ——那样它落在清和壳的 alias
+	// （/images/ → /config/images/bj）底下，实际会去取
+	// /config/images/bj/lt/xxx.png，正好是那份「目录与 URL 只改一边」的裂图。
+	clientIconURLQh = "/icon/"
+	clientBgURLQh   = "/images/"
+	clientIconURLLt = "/lt/icon/"
+	clientBgURLLt   = "/lt/images/"
+)
+
+// ClientIconDir / ClientBgDir 返回某个壳的图标目录 / 背景图池目录（持久卷路径）。
+func ClientIconDir(shell string) string {
+	if shell == ShellLt {
+		return clientIconDirLt
+	}
+	return clientIconDirQh
+}
+
+func ClientBgDir(shell string) string {
+	if shell == ShellLt {
+		return clientBgDirLt
+	}
+	return clientBgDirQh
+}
+
+// ClientIconURLPrefix / ClientBgURLPrefix 是上面两个目录的对外 URL 前缀
+// （静态路由与 nginx alias 都按它挂，见 router.go 与 nginx/site.inc）。
+func ClientIconURLPrefix(shell string) string {
+	if shell == ShellLt {
+		return clientIconURLLt
+	}
+	return clientIconURLQh
+}
+
+func ClientBgURLPrefix(shell string) string {
+	if shell == ShellLt {
+		return clientBgURLLt
+	}
+	return clientBgURLQh
+}
+
+// ClientIconFile 是某个壳的图标文件在持久卷里的完整路径（上传落点）。
+func ClientIconFile(shell string) string {
+	return ClientIconDir(shell) + "/icon.png"
+}
+
+// ClientApkFileName 是产物的**落盘文件名**（也是 /app 静态目录下的对外文件名）：
+// `<应用名>-<壳>.apk`，待发布包为 `<应用名>-<壳>-new.apk`。
+func ClientApkFileName(name, shell string, staged bool) string {
+	suffix := "-" + shell + ".apk"
+	if staged {
+		suffix = "-" + shell + "-new.apk"
+	}
+	return name + suffix
+}
+
+// ClientApkSaveName 是浏览器**存盘**用的文件名：`<应用名>-<壳>[-<版本>].apk`。
+//
+// 与落盘名刻意不同（多带版本号，方便用户区分先后），但**壳标记必须一致** ——
+// 否则两个壳在用户本地又变回同名文件。
+func ClientApkSaveName(name, shell, version string) string {
+	if version == "" {
+		return name + "-" + shell + ".apk"
+	}
+	return name + "-" + shell + "-" + version + ".apk"
+}
+
+// ClientApkLabel 是下载按钮上给用户**看**的文案：`<应用名>[-<版本>].apk`，
+// **不带壳标记**。
+//
+// 与 ClientApkSaveName 只差一个 `-<壳>` 段，但两者服务的是不同的东西：
+//   - 存盘名（:download / 浏览器另存）必须带壳标记 —— 两个壳重名时，
+//     用户本地才不会出现两个同名文件，也才看得出下的是哪一个壳；
+//   - 按钮文案不带 —— 用户在这一屏关心的是"这个包是什么版本"，
+//     而不是壳的内部代号；`清和电视-qh-1.3.2.001.apk` 这种一串代号摆在按钮上
+//     是把内部命名泄漏给了用户。
+//
+// 壳本身已经由按钮上的「（清和壳）/（骆驼壳）」和按钮分组说清楚了。
+func ClientApkLabel(name, version string) string {
+	if version == "" {
+		return name + ".apk"
+	}
+	return name + "-" + version + ".apk"
+}
+
+// ClientApkURL / ClientLtApkURL 是产物的对外下载路径（路由把 /app 映射到 /config/app）。
+func ClientApkURL(name string, staged bool) string {
+	return "/app/" + ClientApkFileName(name, ShellQh, staged)
+}
+
+func ClientLtApkURL(name string, staged bool) string {
+	return "/app/" + ClientApkFileName(name, ShellLt, staged)
+}
+
+// ClientApkPathOf / ClientApkURLOf 是上面四个的通用形式：壳标记是**变量**时用
+// （例如公开下载页要按同一个函数拼两个壳的项）。
+func ClientApkPathOf(name, shell string, staged bool) string {
+	return filepath.Join("/config/app", ClientApkFileName(name, shell, staged))
+}
+
+func ClientApkURLOf(name, shell string, staged bool) string {
+	return "/app/" + ClientApkFileName(name, shell, staged)
+}
+
+// ClientApkPath 返回**清和壳**产物在持久卷里的路径。
+// staged=true 取待发布包（编译产物），false 取线上包。
+//
+// 这里是文件名的**唯一定义处**：编译侧（bootstrap.BuildAPK）与发布/轮询侧
+// （service.ClientApkInfo）都调它，不再各自拼字符串 —— 两边一旦分叉，
+// 症状是"编译成功但发布说包不存在"，每一步的返回值看上去都正常。
+func ClientApkPath(name string, staged bool) string {
+	return ClientApkPathOf(name, ShellQh, staged)
 }
 
 // IsApkName 判断文件名是不是一个 APK（上传接口用）。
@@ -176,9 +344,6 @@ const (
 	clientLtVersionAsset = "Version_client_lt"
 )
 
-// ClientLtName 是骆驼壳编译产物的固定文件名（不含 .apk）。
-const ClientLtName = "Client_lt"
-
 // PubClientLtBaseFile 记录"线上骆驼壳包编译时所用的基底版本"。
 func PubClientLtBaseFile() string { return ClientUserDir + "/PubBase_lt" }
 
@@ -221,12 +386,17 @@ func SetClientPublishedLtBase(base string) error {
 }
 
 // ClientLtApkPath 返回骆驼壳产物在持久卷里的路径。staged=true 取待发布包。
-func ClientLtApkPath(staged bool) string {
-	suffix := ".apk"
-	if staged {
-		suffix = "-new.apk"
-	}
-	return filepath.Join("/config/app", ClientLtName+suffix)
+//
+// 文件名取 cfg.BuildLt.Name（后台「应用名」）+ `-lt` 标记，与清和壳的
+// ClientApkPath 同口径（同走 ClientApkFileName）—— 编译侧 BuildLuotuoAPK
+// 落的就是它，两边必须是同一个名字。
+//
+// 早先这里硬编码常量 "Client_lt"：只要应用名不是 Client_lt（那是常态，例如
+// 「骆驼电视」），就会编译成功却**发布不了** —— 产物落在
+// /config/app/骆驼电视-new.apk，而发布去找 /config/app/Client_lt-new.apk，
+// 报「待发布的安装包不存在」；轮询那张卡片也一并读成 0 MB / 未编译。
+func ClientLtApkPath(name string, staged bool) string {
+	return ClientApkPathOf(name, ShellLt, staged)
 }
 
 // ClientLtFactoryPackage 返回镜像出厂骆驼壳基包（/app/client/Client_lt.apk）的包名。

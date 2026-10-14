@@ -1,35 +1,42 @@
 package dto
 
-// IndexDto 是前台下载页（GET /api/site/index）的数据。
+// IndexDto 是前台下载页（GET /api/site/index）下发的按钮信息。
 //
-// ShowDown* 是**最终是否显示**（按钮开关 && APK 已编译），不是配置里的开关值 ——
-// 开关值见引擎 dto.DlButtonsDto（下载页编辑页读它）。
+// ## 为什么有两组 APK
 //
-// 两个客户端壳各占一组字段：
-//   - `apk_*`     归**骆驼壳**（= 主槽位，与设置页 tab 顺序、下载页首个按钮三处一致）；
-//   - `apk_qh_*`  归**清和壳**。
+// 服务端并行提供**两个壳**的客户端，下载页要把它们分开列出来：
+//   - 骆驼壳（主槽位）：client/smali 树编出来的那套 → ApkUrl / ApkName / ShowDown
+//   - 清和壳：预编译 Client.apk 那套 → ApkQhUrl / ApkQhName / ShowDownQh
 //
-// 名字刻意不新造 `apk_lt_*`：`{APK_URL}` / `{APK_NAME}` 是用户在自定义下载页源码里
-// 写死的对外契约，改名等于让所有存量下载页静默失效。
+// 两个壳共用同一套编译接口（until.BuildClientApk），但基底、应用名、版本号
+// 与下载地址各自独立，所以按钮也必须各自一套 —— 合成一个字段会让用户
+// 只能下到其中一个。
+//
+// 字段名沿用改造前的 `apk_*`（不新造 `apk_lt_*`）：前台自定义下载页的
+// `{APK_URL}` / `{APK_NAME}` 两个占位符是**对外契约**，用户在页面源码里写死了，
+// 改名等于让所有存量下载页静默失效。`apk_*` 归主槽位（骆驼壳），
+// 与设置页的 tab 顺序、下载页的首个按钮一致。
+//
+// ## Name 与 Label 的区别
+//
+//   - `*_name`（ApkName / ApkQhName）：**存盘名**，带壳标记
+//     （`清和电视-qh-1.3.2.001.apk`），挂在 `<a download>` 上；
+//   - `*_label`（ApkLabel / ApkQhLabel）：按钮**文案**，不带壳标记
+//     （`清和电视-1.3.2.001.apk`）。
+//
+// 壳标记是给"文件"用的（两个壳可能重名，落盘必须分得开），不是给用户看的。
+// 见 until.ClientApkLabel。
 type IndexDto struct {
 	ApkUrl       string `json:"apk_url"`
 	ApkName      string `json:"apk_name"`
-	Content      string `json:"content"`
+	ApkLabel     string `json:"apk_label"`
 	ShowDown     bool   `json:"show_down"`
+	ApkQhUrl     string `json:"apk_qh_url"`
+	ApkQhName    string `json:"apk_qh_name"`
+	ApkQhLabel   string `json:"apk_qh_label"`
+	ShowDownQh   bool   `json:"show_down_qh"`
+	Content      string `json:"content"`
 	ShowDownMyTV bool   `json:"show_down_mytv"`
 	MyTVName     string `json:"mytv_name"`
 	MyTVUrl      string `json:"mytv_url"`
-
-	// 清和壳（Client.apk 那套）：与骆驼壳同构，只是字段名带 qh 后缀。
-	ShowDownQh bool   `json:"show_down_qh"`
-	ApkQhName  string `json:"apk_qh_name"`
-	ApkQhUrl   string `json:"apk_qh_url"`
-
-	// 定制客户端（定制授权专属）。名字与 mytv 同一套兜底，文件名不带版本号。
-	ShowDownCustom bool   `json:"show_down_custom"`
-	CustomName     string `json:"custom_name"`
-	CustomUrl      string `json:"custom_url"`
-
-	// ShowAdmin 控制「进后台」那个按钮（无文件条件，只看开关）。
-	ShowAdmin bool `json:"show_admin"`
 }
