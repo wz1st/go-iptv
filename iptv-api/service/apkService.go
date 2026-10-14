@@ -24,6 +24,7 @@ func Getver(base string) dto.GetverRes {
 	var res dto.GetverRes
 
 	var cfg = dao.GetConfig()
+	// 清和壳：回落 cfg.ServerUrl（自己的那一份）
 	base = publicBase(base, cfg.ServerUrl)
 
 	// **必须下发完整四段**（基底.编译号），不能只给编译号。
@@ -58,7 +59,10 @@ func GetverLt(base string) dto.GetverRes {
 	var res dto.GetverRes
 
 	cfg := dao.GetConfig()
-	base = publicBase(base, cfg.ServerUrl)
+	// 骆驼壳：回落到 **server_url_lt**（自己那一份），不是清和壳的。
+	// 否则两个壳各填各的地址时，骆驼壳在「请求没带基址」时
+	// 会下发清和壳那个站的下载地址 —— 表现为升级指向错的站 / 图裂。
+	base = publicBase(base, until.LuotuoServerURL(cfg))
 
 	res.AppVer = until.FormatClientVersion(until.ClientPublishedLtBase(), cfg.BuildLt.Version)
 	res.UpSets = cfg.App.Update.Set
@@ -93,6 +97,16 @@ func GetBg(shell string) string {
 
 // publicBase 归一下发地址用的对外基址：拿得到请求基址就用它，否则回落配置里的 ServerUrl。
 // 两个来源都要吃掉尾斜杠，避免拼出 `//app/`。
+// publicBase 取本次请求该用的对外基址：请求基址优先，拿不到才回落配置。
+//
+// ★ **回落到哪一份配置由调用方决定**（清和壳 cfg.ServerUrl、骆驼壳
+// cfg.ServerUrlLt，见 until.LuotuoServerURL）—— 两个壳的地址本来各存一份
+// （2026-10-14 修正），这里若一律回落 cfg.ServerUrl，骆驼壳在「没带请求基址」
+// 时会拿到清和壳的地址，客户端拿到的下载/图片地址指向另一个站（图裂、
+// 升级指向错的站）。所以这里只做"取谁"的动作，不自己决定用哪份。
+//
+// base 优先于配置还有个原因：站点挂 HTTPS 后配置里那条 http 会让客户端
+// 拿到混合内容被浏览器拦掉（原因见 api.ApkLogin 的注释）。
 func publicBase(base, fallback string) string {
 	if strings.TrimSpace(base) == "" {
 		base = fallback
@@ -100,12 +114,23 @@ func publicBase(base, fallback string) string {
 	return strings.TrimRight(strings.TrimSpace(base), "/")
 }
 
-func ApkLogin(user models.IptvUser, base string) dto.LoginRes {
+// ApkLogin 下发登录响应。
+//
+// ★ shell：清和壳与骆驼壳**共用这一个入口**（api 层按 `?shell=lt` 分流，
+// 见 api.ApkLogin 里的 isLuotuoShell），所以必须由调用方告知是哪个壳 ——
+// 两个壳的地址各存一份（cfg.ServerUrl / cfg.ServerUrlLt），
+// 这里回落到错的那份，客户端拿到的 dataurl/logo 就指向另一个站。
+func ApkLogin(user models.IptvUser, base, shell string) dto.LoginRes {
 
 	var result dto.LoginRes
 
 	var cfg = dao.GetConfig()
-	base = publicBase(base, cfg.ServerUrl)
+	// 骆驼壳回落到 server_url_lt（自己那份），清和壳回落到 server_url。
+	fallback := cfg.ServerUrl
+	if shell == until.ShellLt {
+		fallback = until.LuotuoServerURL(cfg)
+	}
+	base = publicBase(base, fallback)
 
 	result.IP = user.IP
 	// 账号以 json 字符串下发。客户端 `ServerConfig.accountId` 声明为 String，
@@ -227,11 +252,19 @@ func GetChannels(channel dto.DataReqDto, base string, lt bool) string {
 	cfg := dao.GetConfig()
 	// 台标是**相对路径**（/logo/xxx.png，见 until.EpgNameGetLogo），
 	// 客户端拿不到就直接显示不出来，所以这里补成绝对地址。
-	// base 只在能识别出合法 Host 时才有效，取不到时回落到配置的 ServerUrl ——
+	// base 只在能识别出合法 Host 时才有效，取不到时回落到配置 ——
 	// 与 adminBase 同口径，避免反代/裸 IP 场景下台标整批失效。
+	//
+	// ★ 回落按壳取：lt=true 走骆驼壳那份（server_url_lt）。两个壳各填各的
+	// 地址时，一律回落 cfg.ServerUrl 会让骆驼壳客户端拿到清和壳那个站的
+	// 台标地址 —— 表现为整批台标裂开，而服务端日志一条异常都没有。
 	logoBase := base
 	if logoBase == "" {
-		logoBase = strings.TrimRight(cfg.ServerUrl, "/")
+		fallback := cfg.ServerUrl
+		if lt {
+			fallback = until.LuotuoServerURL(cfg)
+		}
+		logoBase = strings.TrimRight(fallback, "/")
 	}
 	for _, v := range categoryList {
 		var tmpData []dto.ChannelData

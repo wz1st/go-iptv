@@ -147,6 +147,8 @@ var adminRoutes = []apiRoute{
 	{"client/buffTimeout", api.ClientBuffTimeout},
 	{"client/needAuthor", api.ClientNeedAuthor},
 	{"client/appInfo", api.ClientAppInfo},
+	// 「保存并测试」拆两步：这一步只测可达性，不落盘、不触发编译。
+	{"client/testUrl", api.ClientTestUrl},
 	{"client/tipSet", api.ClientTipSet},
 	// 广告内容（客户端退出弹窗那行，仅定制授权可改）
 	{"client/adInfo", api.ClientAdInfo},
@@ -164,6 +166,9 @@ var adminRoutes = []apiRoute{
 	// 骆驼壳（独立客户端基底）：与 清和壳 各自一组路由，编译接口共用 BuildClientApk。
 	{"client/lt/data", api.LuotuoData},
 	{"client/lt/appInfo", api.LuotuoAppInfo},
+	// 与清和壳同一个 handler：探测的是「编译时真正会用的那个路由」，
+	// 差别由地址本身决定（清和 /apk/getver、骆驼 /apk/lt/getver）。
+	{"client/lt/testUrl", api.ClientTestUrl},
 	{"client/lt/buildStatus", api.LuotuoBuildStatus},
 	{"client/lt/publish", api.LuotuoPublish},
 	{"client/lt/uploadBaseApk", api.LuotuoUploadBaseApk},

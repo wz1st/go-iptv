@@ -3,6 +3,7 @@ package until
 import (
 	"bytes"
 	"fmt"
+	"iptv-api/dto"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,27 @@ import (
 	"slices"
 	"strings"
 )
+
+// LuotuoServerURL 返回骆驼壳该用的站点根。
+//
+// ★ 两个壳的地址**各存一份**（Config.ServerUrlLt / Config.ServerUrl）——
+// 两个壳的用户群常常不同，一个填内网、另一个填外网是常态；共用一个字段
+// 会出现「在骆驼壳页改地址，把清和壳的地址也改掉」，编出来的清和壳包里
+// 带着骆驼壳的地址，客户端连不上。
+//
+// **空值回退到 ServerUrl**：加这个键之前的老配置只有一份，直接判空会让
+// 升级后骆驼壳编译出空地址。这个回退口径是**编译与页面显示共用的唯一实现**
+// （bootstrap 与 spaDataApi 都调它）—— 两边各写一份就会出现「页面显示 A、
+// 编译用 B」，用户看着"我明明填对了"却连不上。
+func LuotuoServerURL(cfg *dto.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if strings.TrimSpace(cfg.ServerUrlLt) != "" {
+		return cfg.ServerUrlLt
+	}
+	return cfg.ServerUrl
+}
 
 // 客户端基底的解包 → 改写 → 重编译（**全程在 api 侧**）。
 //

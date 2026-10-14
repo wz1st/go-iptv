@@ -88,13 +88,22 @@ func TestCaGetChannelsSelectsGroupUa(t *testing.T) {
 func TestApkClientURLsUseRequestBase(t *testing.T) {
 	src := srcOf(t, "../api/apkApi.go")
 	for _, want := range []string{
-		"service.ApkLogin(dbUser, adminBase(c))",
+		// ★ 第三个实参 shell 不能少：两个壳共用这一个入口，service 层要靠它
+		// 决定回落到 server_url 还是 server_url_lt（少了就永远是清和壳那份）。
+		"service.ApkLogin(dbUser, adminBase(c), shell)",
 		"service.Getver(adminBase(c))",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("客户端接口不再走请求基址：缺少 %q", want)
 		}
 	}
+
+	// ★ shell 必须真的由 isLuotuoShell 判定出来，不能写死一个壳。
+	if !strings.Contains(src, "if isLuotuoShell(c) {") {
+		t.Error("ApkLogin 的 shell 实参不是按 isLuotuoShell 判出来的 —— " +
+			"两个壳共用这个入口，写死就等于其中一个壳永远拿错地址")
+	}
+
 	// 反向断言：不许退回配置里的固定地址
 	for _, bad := range []string{"service.Getver(cfg.ServerUrl", "service.Getver(dao.GetConfig().ServerUrl"} {
 		if strings.Contains(src, bad) {
