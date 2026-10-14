@@ -69,6 +69,19 @@ func ClientAppInfo(c *gin.Context) {
 	reply(c, service.SetAppInfo(req))
 }
 
+// ClientTestUrl 「保存并测试」里的**测试**那一步：探测填的地址是否可达。
+// 只读、不落盘 —— 真正的保存仍走 appInfo（那里才归一化地址并触发编译）。
+//
+// 独立一个端点而不是给 appInfo 加 save 开关：编译是分钟级重活，
+// 用户每改一个字就点一下"保存并测试"会把编译队列打满。
+func ClientTestUrl(c *gin.Context) {
+	var req dto.ClientTestUrlReq
+	if !bindJSON(c, &req) {
+		return
+	}
+	reply(c, service.TestServerURL(req))
+}
+
 // ClientTipSet 保存客户端各类提示文案。
 func ClientTipSet(c *gin.Context) {
 	var req dto.ClientTipSetReq

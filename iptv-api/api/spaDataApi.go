@@ -148,8 +148,11 @@ func LuotuoData(c *gin.Context) {
 	staged := until.ClientLtApkPath(cfg.BuildLt.Name, true)
 
 	pageData := dto.AdminClientDto{
-		Title:       "骆驼壳客户端设置",
-		ServerUrl:   cfg.ServerUrl,
+		Title: "骆驼壳客户端设置",
+		// 骆驼壳自己的那份地址（server_url_lt）；空值回退与编译侧共用
+		// until.LuotuoServerURL —— 两边各判一次就会出现「页面显示 A、
+		// 编译用 B」。
+		ServerUrl:   until.LuotuoServerURL(cfg),
 		Build:       cfg.BuildLt,
 		App:         cfg.App,
 		Tips:        cfg.Tips,

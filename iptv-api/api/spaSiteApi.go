@@ -236,7 +236,9 @@ func InstallData(c *gin.Context) {
 		PasswordHash: password,
 	})
 	cfg := dao.GetConfig()
-	cfg.ServerUrl = strings.TrimSuffix(apkApi, "/")
+	// 同样只存站点根：向导里这个地址常被填成"带 /apk 的完整地址"，
+	// 存进去会让后续服务端自己拼的 dataurl 变成 /apk/apk/… 直接 404。
+	cfg.ServerUrl = bootstrap.NormalizeServerURL(apkApi)
 	dao.SetConfig(cfg)
 	// 先重置停止信号：安装前若已跑过 Crontab（例如上一轮安装被清库重装），
 	// 直接 make 新通道会让旧循环永远等不到停止信号。

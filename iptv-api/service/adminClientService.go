@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -145,6 +147,99 @@ func SetNeedAuthor(req dto.ClientNeedAuthorReq) dto.ReturnJsonDto {
 	return dto.ReturnJsonDto{Code: 1, Msg: "授权设置成功", Type: "success"}
 }
 
+// TestServerURL 探测用户在后台填的「APK连接地址」是否真的可达。
+//
+// **测什么**：打客户端登录时用的那个路由（清和壳 /apk/getver，骆驼壳 /apk/lt/getver），
+// 而不是简单地 GET 站点根。理由：站点根 200 什么都不证明 —— 常见故障是
+// path 填错（比如存进去带了 /apk，服务端自己拼出 /apk/apk/… 直接 404），
+// 这时根路径照样 200，只有打真路由才会暴露。
+//
+// 判定口径：**只认能连上并拿到 HTTP 响应**（含 4xx/5xx）。
+// 连接失败/超时时才报错 —— 因为"地址填的是别人的站、那边返回 403"也是可达的，
+// 但后端在 /config 里不该出现这种情况，报错反而误导。
+//
+// SSRF 防护：只允许 http/https；不带凭据；限制重定向（防止被引到内网）；
+// 超时短（这是给用户点按钮用的交互，不是长任务）。
+func TestServerURL(req dto.ClientTestUrlReq) dto.ReturnJsonDto {
+	raw := strings.TrimSpace(req.ServerUrl)
+	if raw == "" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "请先填写连接地址", Type: "danger"}
+	}
+
+	// 用户若带了 path，这里先剥掉再拼 —— 展示给用户的"最终会用到的地址"
+	// 必须是编译时真正注入的那个（清和 /apk、骆驼 /apk/lt），不然提示会误导。
+	base := bootstrap.NormalizeServerURL(raw)
+	if base == "" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "地址不合法", Type: "danger"}
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "地址不合法：" + raw, Type: "danger"}
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "只支持 http/https 地址", Type: "danger"}
+	}
+
+	// 探两个壳各自的路由：哪条通就说明地址可用，返回它作为"编译时会用的地址"。
+	// 两个都试是因为这个输入框两个壳共用，用户可能正要编其中任意一个。
+	// 带 /apk/lt 的走骆驼壳那条，否则清和壳那条。
+	probe := base + "/apk/getver"
+	shell := "清和壳"
+	if strings.HasSuffix(strings.TrimRight(base, "/"), "/lt") || strings.Contains(base, "/lt/") {
+		probe = base + "/apk/lt/getver"
+		shell = "骆驼壳"
+	}
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// 只跟 3 跳：够穿过「http→https」这类跳转，又不会被引着绕圈。
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+	// Go 默认会带上环境里的代理，后台部署常没有可用代理，
+	// 反而把"站点可达"误报成失败。
+	client.Transport = &http.Transport{Proxy: nil}
+
+	resp, err := client.Get(probe)
+	if err != nil {
+		return dto.ReturnJsonDto{
+			Code: 0,
+			Msg:  "无法连接：" + err.Error(),
+			Type: "danger",
+		}
+	}
+	defer resp.Body.Close()
+
+	code := resp.StatusCode
+	// 404/405 这类反而说明"服务在、路由前缀可能不对" —— 单独提示更有用，
+	// 因为这正是用户填了 path 时最容易踩的坑。
+	msg := "连接正常"
+	tip := "success"
+	if code == 404 || code == 405 {
+		msg = "服务可达，但路径 " + probe + " 返回 " + strconv.Itoa(code) + "；请确认地址不要带 path（编译时会自动补）"
+		tip = "danger"
+	} else if code >= 500 {
+		msg = "服务可达，但服务端返回错误 " + strconv.Itoa(code)
+		tip = "danger"
+	}
+
+	return dto.ReturnJsonDto{
+		Code: 1,
+		Msg:  msg,
+		Type: tip,
+		Data: map[string]any{
+			"shell":    shell,
+			"probeUrl": probe,
+			"status":   code,
+			"stored":   base, // 实际会存进 config.yml 的值（已剥 path）
+		},
+	}
+}
+
 // SetAppInfo 编译一个新版本 —— 注意它**只产出待发布包**，不动线上任何东西。
 func SetAppInfo(req dto.ClientAppInfoReq) dto.ReturnJsonDto {
 
@@ -172,8 +267,11 @@ func SetAppInfo(req dto.ClientAppInfoReq) dto.ReturnJsonDto {
 	// 待发布版本号：编译用它，点「发布」时它才变成 Build.Version
 	cfg.Build.NewVersion = appVersion
 
+	// 只存站点根，不存 path —— /apk 由编译时 clientApkHost 按壳补（见 bootstrap.normalizeServerURL）。
+	// 用户若在输入框里带了 /apk 或 /apk/lt，这里会剥掉；不剥的话服务端自己拼
+	// dataurl 会变成 /apk/apk/… 直接 404，而客户端侧只表现为"登录失败"。
 	if cfg.ServerUrl != appServerUrl {
-		cfg.ServerUrl = appServerUrl
+		cfg.ServerUrl = bootstrap.NormalizeServerURL(appServerUrl)
 	}
 
 	if req.UpSet {

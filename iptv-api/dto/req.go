@@ -106,6 +106,12 @@ type ClientTipSetReq struct {
 	UserNoReg     string `json:"userNoReg"`
 }
 
+// ClientTestUrlReq 是「保存并测试」里那条可达性探测的请求体。
+// 只回传地址，不带任何写操作 —— 保存走各自的 appInfo/tipSet 等接口。
+type ClientTestUrlReq struct {
+	ServerUrl string `json:"serverUrl"`
+}
+
 // EPG 列表  /api/epgs
 
 type EpgSaveReq struct {

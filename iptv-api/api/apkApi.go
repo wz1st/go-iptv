@@ -59,7 +59,14 @@ func ApkLogin(c *gin.Context) {
 	// This file should be served over HTTPS）。
 	// 走请求基址就自动同协议：https 进来发 https，http 进来还是 http。
 	// 与 RSS 订阅地址、中转 purl 的基址口径完全一致（都走 until/clientBase）。
-	result := service.ApkLogin(dbUser, adminBase(c))
+	// 两个壳共用这一个入口（`?shell=lt` 分流），所以要把shell 传下去 ——
+	// service层要按它决定回落到哪份配置地址（server_url / server_url_lt）。
+	// 少传这一个参数的后果：骆驼壳在「请求没带基址」时会拿到清和壳的地址。
+	shell := until.ShellQh
+	if isLuotuoShell(c) {
+		shell = until.ShellLt
+	}
+	result := service.ApkLogin(dbUser, adminBase(c), shell)
 
 	// 骆驼壳的「应用下载地址 / 版本」必须用它自己那一套（cfg.BuildLt.*）：
 	// service.ApkLogin 里那两行按清和壳（cfg.Build.*）拼，直接下发会让骆驼壳

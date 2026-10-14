@@ -5,6 +5,7 @@ import (
 	"iptv-api/dao"
 	"iptv-api/until"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -167,7 +168,7 @@ func BuildLuotuoAPK(staged bool) bool {
 	values := until.ClientBuildValues{
 		// 骆驼壳的基址比清和壳多一层 /lt —— 它是**路由级的身份标识**，
 		// 服务端据此认出调用方、挑对应的登录密钥（见 api.isLuotuoShell）。
-		ServerURL:      clientApkHostLt(cfg.ServerUrl),
+		ServerURL:      clientApkHostLt(until.LuotuoServerURL(cfg)),
 		AppName:        cfg.BuildLt.Name,
 		Version:        buildNo,
 		VersionName:    until.FormatClientVersion(base, buildNo),
@@ -194,6 +195,80 @@ func BuildLuotuoAPK(staged bool) bool {
 	return true
 }
 
+// normalizeServerURL 把用户填的连接地址剥成**纯站点根**（去掉末尾的 apk 路由段）。
+//
+// 为什么存裸地址、编译时才补 path：
+//   - path（/apk、/apk/lt）是**服务端自己的路由约定**，会随版本变；
+//     让用户手填就成了"填错就编不出来、且错在哪很难看出来"。
+//   - 历史上正是这个坑：配置里带了 /apk，服务端自己拼出来的 dataurl
+//     就变成 /apk/apk/channels 直接 404，而客户端那边看着"登录失败"。
+//   - 两个壳的 path 还不同（清和 /apk、骆驼 /apk/lt），共用一个输入框时
+//     更不能让用户猜该填哪个。
+//
+// ★★ 但**只剥末尾那段已知的 apk 路由，不能把 path 全剥掉** ——
+// 站点挂在子路径下（http://host/tv）是支持的，那种 path 是**部署前缀**，
+// 剥了会把地址从 http://host/tv/apk 变成 http://host/apk，客户端直接连不上。
+// 判据是"末段是不是我们自己的路由"，而不是"有没有 path"。
+//
+// 幂等：已经是裸地址（无 apk 段）时原样返回，可以反复调用。
+func normalizeServerURL(serverURL string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if trimmed == "" {
+		return ""
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" {
+		// 解析失败（用户填了非法 URL）就原样返回，交给后续校验去报错 ——
+		// 这里静默改成空串会让人以为是"地址被系统清了"。
+		return trimmed
+	}
+	p := u.Path
+	if u.RawPath != "" {
+		p = u.RawPath
+	}
+	if p == "" || p == "/" {
+		return trimmed
+	}
+	// 只在末段命中我们自己的路由段时才剥（大小写不敏感：/APK 也认）。
+	stripped := ""
+	switch {
+	case hasPathSuffixFold(p, "/apk/lt"):
+		// 整段 "/apk/lt" 一起剥 —— 只剥 "/lt" 会剩下 "/apk"，
+		// 下一次调用又把它剥掉，破坏幂等（存盘值与编译值不一致）。
+		p = p[:len(p)-len("/apk/lt")]
+		stripped = "/apk/lt"
+	case hasPathSuffixFold(p, "/apk"):
+		p = p[:len(p)-len("/apk")]
+		stripped = "/apk"
+	}
+	if stripped == "" {
+		// 不是我们的路由段（子路径部署等）⇒ 原样返回，一个字都不改。
+		return trimmed
+	}
+	u.Path = p
+	u.RawPath = ""
+	// 把剥掉的段记进日志：用户不知道自己填过 path，
+	// 回头看配置变成裸地址会以为系统改坏了。
+	out := strings.TrimRight(u.String(), "/")
+	log.Println("连接地址已归一：去掉", stripped, "->", out)
+	return out
+}
+
+// hasPathSuffixFold 判 p 是否以 suffix 结尾（忽略大小写）。
+func hasPathSuffixFold(p, suffix string) bool {
+	if len(p) < len(suffix) {
+		return false
+	}
+	return strings.EqualFold(p[len(p)-len(suffix):], suffix)
+}
+
+// NormalizeServerURL 是 normalizeServerURL 的导出入口 —— 保存配置时用，
+// 保证「存进 config.yml 的」与「编译时补 path 用的」是同一套归一逻辑，
+// 不会各写一份日后走偏。
+func NormalizeServerURL(serverURL string) string {
+	return normalizeServerURL(serverURL)
+}
+
 // clientApkHost 把配置里的站点基址归一成客户端要的那个地址。
 //
 // 两个字段语义不同，不能直接共用：
@@ -209,10 +284,12 @@ func clientApkHost(serverURL string) string {
 	if trimmed == "" {
 		return ""
 	}
-	if strings.HasSuffix(trimmed, "/apk") {
-		return trimmed
+	// 先剥 path 再补，保证结果唯一（用户手填过 /apk/lt 也不会叠成 /apk/apk/lt）
+	base := normalizeServerURL(trimmed)
+	if strings.HasSuffix(base, "/apk") {
+		return base
 	}
-	return trimmed + "/apk"
+	return base + "/apk"
 }
 
 // clientApkHostLt 是骆驼壳的基址：在 clientApkHost 之上再挂一层 /lt。
@@ -228,12 +305,14 @@ func clientApkHostLt(serverURL string) string {
 	if trimmed == "" {
 		return ""
 	}
-	// 幂等：配置里若已经手写了 /apk/lt，就不要再叠一层（会得到 /apk/lt/apk/lt，
-	// 客户端拿到的是 SPA 的 HTML，表现为"登录失败"而服务端日志无异常）。
-	if strings.HasSuffix(trimmed, "/apk/lt") {
-		return trimmed
+	// 先剥掉用户可能手填的 path，再按骆驼壳的约定重挂 —— 顺序不能反，
+	// 否则手填过 /apk 的地址会叠成 /apk/apk/lt（客户端拿到 SPA 的 HTML，
+	// 表现为"登录失败"而服务端日志无异常）。
+	base := normalizeServerURL(trimmed)
+	if strings.HasSuffix(base, "/apk/lt") {
+		return base
 	}
-	return clientApkHost(trimmed) + "/lt"
+	return clientApkHost(base) + "/lt"
 }
 
 // clientIconPath 返回某个壳上传的 logo；没上传返回空串（保留包内默认图）。

@@ -125,17 +125,30 @@ type Config struct {
 	// 与 清和壳（Client.apk，即上面的 Build）互不影响。
 	// **这一项必须同时在 iptv-engine/dto/configDto.go 里声明** —— 引擎会整份重写
 	// config.yml，只在一侧声明的键会在引擎保存配置时被静默丢掉。
-	BuildLt    Build      `mapstructure:"build_lt" json:"buildLt" yaml:"build_lt"`
-	App        App        `mapstructure:"app" json:"app" yaml:"app"`
-	Tips       Tips       `mapstructure:"tips" json:"tips" yaml:"tips"`
-	Ad         Ad         `mapstructure:"ad" json:"ad" yaml:"ad"`
-	Rss        Rss        `mapstructure:"rss" json:"rss" yaml:"rss"`
-	Proxy      Proxy      `mapstructure:"proxy" json:"proxy" yaml:"proxy"`
-	Resolution Resolution `mapstructure:"resolution" json:"resolution" yaml:"resolution"`
-	Epg        Epg        `mapstructure:"epg" json:"epg" yaml:"epg"`
-	System     System     `mapstructure:"system" json:"system" yaml:"system"`
-	MyTV       MyTV       `mapstructure:"mytv" json:"mytv" yaml:"mytv"`
-	Site       Site       `mapstructure:"site" json:"site" yaml:"site"`
-	SSL        SSL        `mapstructure:"ssl" json:"ssl" yaml:"ssl"`
+	BuildLt Build `mapstructure:"build_lt" json:"buildLt" yaml:"build_lt"`
+	// ServerUrlLt 是「骆驼壳」的 APK 连接地址，与上面清和壳的 ServerUrl **各存一份**。
+	//
+	// ★ 为什么不能共用（2026-10-14 修正）：两个壳的用户可能完全不同 ——
+	// 清和壳填的是内网/生产地址、骆驼壳填的是另一个外网地址很常见，
+	// 而共用一个字段意味着「在骆驼壳页改地址会把清和壳的地址也改掉」，
+	// 编出来的清和壳包里就会带着骆驼壳的地址，客户端直接连不上。
+	//
+	// ★ **这一项必须同时在 iptv-engine/dto/configDto.go 里声明**（理由同 BuildLt：
+	// 引擎整份重写 config.yml，单侧声明的键会被静默丢掉）。
+	//
+	// 空值回退到 ServerUrl：老配置没有这个键，若不回退则升级后骆驼壳编译
+	// 会拿到空地址（而 UserUrl() 之外的路径不会兜底）。
+	ServerUrlLt string     `mapstructure:"server_url_lt" json:"serverUrlLt" yaml:"server_url_lt"`
+	App         App        `mapstructure:"app" json:"app" yaml:"app"`
+	Tips        Tips       `mapstructure:"tips" json:"tips" yaml:"tips"`
+	Ad          Ad         `mapstructure:"ad" json:"ad" yaml:"ad"`
+	Rss         Rss        `mapstructure:"rss" json:"rss" yaml:"rss"`
+	Proxy       Proxy      `mapstructure:"proxy" json:"proxy" yaml:"proxy"`
+	Resolution  Resolution `mapstructure:"resolution" json:"resolution" yaml:"resolution"`
+	Epg         Epg        `mapstructure:"epg" json:"epg" yaml:"epg"`
+	System      System     `mapstructure:"system" json:"system" yaml:"system"`
+	MyTV        MyTV       `mapstructure:"mytv" json:"mytv" yaml:"mytv"`
+	Site        Site       `mapstructure:"site" json:"site" yaml:"site"`
+	SSL         SSL        `mapstructure:"ssl" json:"ssl" yaml:"ssl"`
 	// Weather   Weather   `mapstructure:"weather" json:"weather" yaml:"weather"`
 }
