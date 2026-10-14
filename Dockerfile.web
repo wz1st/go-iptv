@@ -1,4 +1,15 @@
-FROM alpine:latest
+# ★★基镜像**钉住小版本**，不要用 `latest`（2026-10-14 调整：让 docker pull 时层变动最少）。
+#
+# 为什么这是层缓存的头号杀手：`latest` 是一个**会移动的标签**。
+# 每次 alpine 发布新版本，它指向的镜像 digest 就变了 ⇒ 从第1 层起全部重下，
+# 后面几十层（apk add 的JDK/ffmpeg、android build-tools、nginx 配置…）
+# 全部变成"新层"。表现为：明明只改了一行前端，每次 pull 都要拉几百 MB。
+#
+# 钉住小版本（如 alpine:3.20）后：只要不主动升这个 tag，基镜像 digest 不变，
+# 后面所有层都能命中本地已有内容。新版 alpine 的安全更新由**显式改这一行**
+# 来获取 —— 这是有意的：升级变成一个可审阅的决定，而不是每次构建的副作用。
+ARG ALPINE_VERSION=3.20
+FROM alpine:${ALPINE_VERSION}
 
 ENV TZ=Asia/Shanghai
 ENV ANDROID_HOME=/opt/android-sdk
@@ -12,17 +23,12 @@ VOLUME /config
 EXPOSE 80 443
 
 COPY apktool/apktool apktool/apktool.jar /usr/bin/
-# 编译基底：只拷四个文件（两个壳各一对），落点必须与 until.ClientDir（/app/client）一致。
-# **两个壳的基底都要烤进镜像**：定制分支的 CI 是"产物全即时编译、零 release"，
-# 拿不到在线升级那条路（until/clientOnline.go 走的是 GitHub releases），
-# 少烤一个就等于那个壳永远编不出包。
-#   - Client.apk    + Version_client     清和壳
-#   - Client_lt.apk + Version_client_lt  骆驼壳
-COPY client/Client.apk client/Version_client client/Client_lt.apk client/Version_client_lt /app/client/
 COPY database /app/database
 COPY logo /app/logo
 COPY mytv /app/mytv
 
+# 换源 → 装包 → 拉 build-tools（走代理）→ 清理。
+# 顺序有讲究：换源必须**在 apk add 之前**；代理只对 curl 那一步生效。
 RUN apk add --no-cache \
         openjdk17 \
         bash \
@@ -69,7 +75,14 @@ RUN apk add --no-cache \
  && ln -s ${ANDROID_HOME}/build-tools/apksigner /usr/local/bin/apksigner \
  && ln -s ${ANDROID_HOME}/build-tools/zipalign /usr/local/bin/zipalign \
  && sed -i 's/\r$//' /usr/bin/apktool \
- && chmod +x /usr/bin/apktool /usr/bin/apktool.jar
+ && chmod +x /usr/bin/apktool /usr/bin/apktool.jar \
+ && rm -rf ${ANDROID_HOME}/build-tools/samples \
+           ${ANDROID_HOME}/build-tools/docs \
+           ${ANDROID_HOME}/build-tools/NOTICE.txt \
+           ${ANDROID_HOME}/build-tools/source.properties.bak \
+ && find ${ANDROID_HOME}/build-tools -maxdepth 1 -type f \
+        \( -name '*.txt' -o -name '*.md' -o -name '*.html' \) -delete \
+ && rm -rf /root/.cache /tmp/* 2>/dev/null || true
 
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
 COPY nginx/proxy_params.inc /etc/nginx/conf.d/proxy_params.inc
@@ -80,25 +93,52 @@ COPY nginx/site.inc /etc/nginx/conf.d/site.inc
 # 由后台「SSL 证书」页生成；这里预建目录只是为了首次启动时通配 include 有目录可扫。
 RUN mkdir -p /config/nginx /config/cert
 
+# ★★ 以下是"每次发布都会变"的部分，一律排在最后（2026-10-14 调整）。
+#
+# 层的失效规则是**从第一条变化的指令起，后面全部重算**。原先基包
+# （client/Client.apk、Client_lt.apk）排在 apk add 那个 200MB+ 的 RUN **之前**，
+# 而基包是随 ez-apk CI 流水线经常更新的 ⇒ 每次更新基包都会让 JDK/ffmpeg/
+# android build-tools/nginx 整层作废，pull 时要重下几百 MB。
+# 把它挪到所有重活之后，基包更新就只影响它自己那几层。
+#
+# 两套壳的编译基底：**基包是编译基底的唯一来源**，缺哪个壳的，
+# 那个壳就整条链路断掉 —— 且断得很安静：
+#   · ClientFactoryPackage/ClientLtFactoryPackage 探测不到 ⇒ 上传基包时
+#     准入校验直接报"无法读取镜像内*基包包名"；
+#   · 没上传过基包的部署方（绝大多数）编译时基底不存在 ⇒ 编译必失败。
+# 早先只 COPY 了清和壳那份，镜像里的 Client_lt.apk 是手工塞进去的，
+# 一重建镜像就没了 —— 这类"只存在于某台机器上"的状态必须落回 Dockerfile。
+COPY client/Client.apk client/Version_client client/Client_lt.apk client/Version_client_lt /app/client/
+
+# 配置与文档：ChangeLog.md 每次发布都改，所以这一组也在尾部。
+# （与基包分开的单独一层：只改 ChangeLog 时不必重传基包那几十 MB。）
 COPY config.yml README.md dictionary.txt alias.json ChangeLog.md keystore.p12 /app/
 
-COPY --chmod=0755 iptv_all/iptv_amd64 /app/iptv
-COPY --chmod=0755 engine_all/engine_amd64 /app/engine
-COPY --chmod=0755 start_all/start_amd64 /app/start
+# 二进制产物。`/app/.image/{iptv,engine}` 是**启动器自愈用的镜像层副本**
+# （iptv-start/until/selfheal.go 的 ImageBackupDir）：/app 是容器可写层，
+# docker restart 抹不掉，产物被写坏或被卷里的旧包降级时靠它恢复。
+# 少拷一份会静默失去自愈能力（自愈是"拿不到副本就一律不动"，不报错）。
+#
+# ★ 三个产物**合成一层**（原先逐个 COPY 是三层，每层一次全量 manifest）。
+# 做法：多源 COPY 要求目标是**目录**，所以落盘时用最终文件名——
+# 构建上下文里给这三个文件起别名（见 .dockerignore 旁的 prepare 步骤）
+# 不现实（文件名由 build_results.sh 定死），因此这里用「临时名 + 同一层内 mv」：
+#   COPY 一层 → RUN 在同一条指令链里改名，仍只占一层。
+COPY iptv_all/iptv_amd64 engine_all/engine_amd64 start_all/start_amd64 /tmp/prod/
 
-# 原始产物副本。运行目录里的产物被换坏、或被卷里的旧包降级时，启动器拿它恢复回
-# 镜像版本。/app 是容器可写层，docker restart 抹不掉升级写进去的东西，只有重建容器
-# 才回得来 —— 这份副本让"回到镜像版本"变成每次启动自动完成的事。
-COPY --chmod=0755 iptv_all/iptv_amd64 /app/.image/iptv
-COPY --chmod=0755 engine_all/engine_amd64 /app/.image/engine
+RUN set -eu; \
+    mv /tmp/prod/iptv_amd64  /app/iptv; \
+    mv /tmp/prod/engine_amd64 /app/engine; \
+    mv /tmp/prod/start_amd64  /app/start; \
+    chmod 0755 /app/iptv /app/engine /app/start; \
+    mkdir -p /app/.image; \
+    cp /app/iptv   /app/.image/iptv; \
+    cp /app/engine /app/.image/engine; \
+    rm -rf /tmp/prod
 
 ARG APP_VERSION=""
 COPY webdist /app/web
 
-# 镜像内置版本清单：启动器在"产物答不出自身版本"时拿它兜底（否则只能显示"未知"）。
-# 在**镜像内问产物自己**，保证清单与镜像里那份产物严格同源、不会各说各话。
-# api / 引擎的 `-version` 都在任何环境预检之前返回，构建期执行是安全的；
-# 前端没有可执行产物，从 index.html 的 meta 标记里读。
 RUN set -eu; \
     api=$(/app/iptv -version 2>/dev/null | tr -d '\r\n') || api=""; \
     eng=$(/app/engine -version 2>/dev/null | tr -d '\r\n') || eng=""; \
