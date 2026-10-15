@@ -282,19 +282,30 @@ func isNewer(newVer, oldVer string) (bool, error) {
 	return false, nil
 }
 
-func CheckNewVerWeb(local string) (bool, string, error) {
+// CheckNewVerWebAndFront 检查「管理系统 + 前端」整包是否有新版本。
+// 返回 up / newVer / frontMissing / err：
+//   - frontMissing=true 表示发布里缺前端整包 webdist.tar.gz，此时即便 api 有
+//     新版也无法做到「api 与前端同时更新」，必须提示用户更新镜像。
+func CheckNewVerWebAndFront(local string) (bool, string, bool, error) {
 	rel, err := latestAppRelease()
 	if errors.Is(err, errNoMatchingRelease) {
 		// 仓库里还没有三段版本号的正式发布：对当前安装来说就是"没有更新"，
 		// 不是错误。前端会显示"当前已是最新版本"。
-		return false, "", nil
+		return false, "", false, nil
 	}
 	if err != nil {
 		log.Println("连接Github 检查失败，请检查网络连接")
-		return false, "", fmt.Errorf("连接Github 检查失败，请检查网络连接")
+		return false, "", false, fmt.Errorf("连接Github 检查失败，请检查网络连接")
 	}
 	up, err := isNewer(rel.TagName, local)
-	return up, rel.TagName, err
+	if !up {
+		return false, rel.TagName, false, nil
+	}
+	if err != nil {
+		// 跨大版本/大改动：不能在线升级。
+		return true, rel.TagName, false, err
+	}
+	return true, rel.TagName, assetURLs(rel)[frontAssetName] == "", nil
 }
 
 func CheckNewVerEngine(local string) (bool, string, error) {
@@ -309,28 +320,6 @@ func CheckNewVerEngine(local string) (bool, string, error) {
 	ver := strings.TrimPrefix(rel.TagName, engineTagPrefix)
 	up, err := isNewer(ver, local)
 	return up, ver, err
-}
-
-// CheckNewVerFront 检查前端产物（webdist）是否有新版本。
-func CheckNewVerFront(local string) (bool, string, error) {
-	rel, err := latestAppRelease()
-	if errors.Is(err, errNoMatchingRelease) {
-		return false, "", nil
-	}
-	if err != nil {
-		log.Println("连接Github 检查失败，请检查网络连接")
-		return false, "", fmt.Errorf("连接Github 检查失败，请检查网络连接")
-	}
-
-	up, err := isNewer(rel.TagName, local)
-	if err != nil || !up {
-		return up, rel.TagName, err
-	}
-	if assetURLs(rel)[frontAssetName] == "" {
-		return true, rel.TagName, fmt.Errorf("发布 %s 未提供前端产物 %s，"+
-			"不支持在线升级，请更新镜像", rel.TagName, frontAssetName)
-	}
-	return true, rel.TagName, nil
 }
 
 // 下载
@@ -415,14 +404,20 @@ func assetURLs(rel *githubRelease) map[string]string {
 
 func downloadDir() string { return "/tmp/down" }
 
-// stageUpdata 下载 → 按清单校验 → 落到 /config/updata。
-func stageUpdata(rel *githubRelease, assets map[string]string, names []string) (bool, string, error) {
+// stageUpdata 下载多个资产 → 按同一份校验清单校验 → 落到 /config/updata。
+// sumsName 是校验清单资产名；pairs 为 [原始资产名, 落地名] 序列。
+// 落地名是 iptv / engine 这类可执行二进制时才补可执行位；webdist.tar.gz 等
+// 整包保持默认权限即可（启动器按文件名识别、解包应用）。
+func stageUpdata(rel *githubRelease, assets map[string]string, sumsName string, pairs [][2]string) (bool, string, error) {
 	// 先确认资产都在。这一步单独做，是为了让「CI 改了资产名」这种失误
 	// 报成一句能直接看懂的话，而不是后面某处"文件不存在"。
-	for _, n := range []string{names[0], names[1]} {
-		if assets[n] == "" {
-			return false, "", fmt.Errorf("发布 %s 里没有资产 %s", rel.TagName, n)
+	for _, p := range pairs {
+		if assets[p[0]] == "" {
+			return false, "", fmt.Errorf("发布 %s 里没有资产 %s", rel.TagName, p[0])
 		}
+	}
+	if assets[sumsName] == "" {
+		return false, "", fmt.Errorf("发布 %s 里没有资产 %s", rel.TagName, sumsName)
 	}
 
 	downDir := downloadDir()
@@ -430,43 +425,64 @@ func stageUpdata(rel *githubRelease, assets map[string]string, names []string) (
 	os.MkdirAll(downDir, 0755)
 	os.MkdirAll(upDir, 0755)
 
-	localBin := filepath.Join(downDir, names[0])
-	localSums := filepath.Join(downDir, names[1])
-	if err := downloadFile(assets[names[0]], localBin); err != nil {
+	localSums := filepath.Join(downDir, sumsName)
+	if err := downloadFile(assets[sumsName], localSums); err != nil {
 		return false, "", err
 	}
-	if err := downloadFile(assets[names[1]], localSums); err != nil {
-		return false, "", err
-	}
-	if !verifySHA(localBin, loadSums(localSums)) {
-		return false, "", fmt.Errorf("%s 校验失败", names[0])
+	sums := loadSums(localSums)
+
+	// 逐项下载 + 校验（先全部下完再落地，坏一个不污染待安装区）。
+	for _, p := range pairs {
+		local := filepath.Join(downDir, p[0])
+		if err := downloadFile(assets[p[0]], local); err != nil {
+			return false, "", err
+		}
+		if !verifySHA(local, sums) {
+			return false, "", fmt.Errorf("%s 校验失败", p[0])
+		}
 	}
 
 	// 先删旧再落新：旧文件在时启动器可能读到半新半旧的组合。
-	os.Remove(filepath.Join(upDir, names[2]))
-	dst := filepath.Join(upDir, names[2])
-	if err := copyFile(localBin, dst); err != nil {
-		return false, "", err
+	for _, p := range pairs {
+		os.Remove(filepath.Join(upDir, p[1]))
 	}
-	// 升级包里的二进制要能被执行 —— 启动器要跑 `-version` 读它的版本号，
-	// 生效时也是直接 replace 到运行目录后执行。丢可执行位等于"下载成功但用不了"。
-	if err := os.Chmod(dst, 0755); err != nil {
-		return false, "", err
+	for _, p := range pairs {
+		dst := filepath.Join(upDir, p[1])
+		if err := copyFile(filepath.Join(downDir, p[0]), dst); err != nil {
+			return false, "", err
+		}
+		// 只有可执行二进制（iptv / engine）需要可执行位；整包保持默认权限。
+		if p[1] == "iptv" || p[1] == "engine" {
+			if err := os.Chmod(dst, 0755); err != nil {
+				return false, "", err
+			}
+		}
 	}
 
 	return true, rel.TagName, nil
 }
 
-// DownloadAndVerifyWeb 下载管理系统（api）新版本到待安装区。
-// 资产：iptv_<arch> / SHA256SUMS.txt ⇒ 落地 iptv。
+// DownloadAndVerifyWeb 下载「管理系统(api) + 前端(webdist)」整包到待安装区。
+// 两者随同一发布标签发布，在线升级时一起更新：
+//   - iptv_<arch> / SHA256SUMS.txt ⇒ 落地 iptv
+//   - webdist.tar.gz / SHA256SUMS.txt ⇒ 落地 webdist.tar.gz
+//
+// 缺前端整包时说明发布不完整，无法做到「api 与前端同时更新」，提示更新镜像。
 func DownloadAndVerifyWeb(arch string) (bool, string, error) {
 	rel, err := latestAppRelease()
 	if err != nil {
 		logCheckErr(err)
 		return false, "", err
 	}
+	assets := assetURLs(rel)
+	if assets[frontAssetName] == "" {
+		return false, "", fmt.Errorf("发布 %s 未提供前端产物 %s，请更新镜像", rel.TagName, frontAssetName)
+	}
 	binary := "iptv_" + arch
-	return stageUpdata(rel, assetURLs(rel), []string{binary, apiSumsName, "iptv"})
+	return stageUpdata(rel, assets, apiSumsName, [][2]string{
+		{binary, "iptv"},
+		{frontAssetName, frontAssetName},
+	})
 }
 
 // DownloadAndVerifyEngine 下载引擎新版本到待安装区。
@@ -478,21 +494,7 @@ func DownloadAndVerifyEngine(arch string) (bool, string, error) {
 		return false, "", err
 	}
 	binary := "engine_" + arch
-	return stageUpdata(rel, assetURLs(rel), []string{binary, engineSumsName, "engine"})
-}
-
-// DownloadAndVerifyFront 下载前端产物整包到待安装区。
-func DownloadAndVerifyFront() (bool, string, error) {
-	rel, err := latestAppRelease()
-	if err != nil {
-		logCheckErr(err)
-		return false, "", err
-	}
-	if assetURLs(rel)[frontAssetName] == "" {
-		return false, "", fmt.Errorf("发布 %s 未提供 %s，请更新镜像", rel.TagName, frontAssetName)
-	}
-	return stageUpdata(rel, assetURLs(rel),
-		[]string{frontAssetName, apiSumsName, frontAssetName})
+	return stageUpdata(rel, assetURLs(rel), engineSumsName, [][2]string{{binary, "engine"}})
 }
 
 // logCheckErr 只对真正的故障打"连接失败"。

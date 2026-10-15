@@ -8,7 +8,6 @@ import (
 	"iptv-api/until"
 	"log"
 	"runtime"
-	"strings"
 )
 
 func Admins(req dto.AdminProfileReq) dto.ReturnJsonDto {
@@ -58,7 +57,8 @@ func UpdataCheckWeb() dto.ReturnJsonDto {
 
 	oldWeb := until.GetVersion()
 
-	up, newWeb, err := until.CheckNewVerWeb(oldWeb)
+	// api 与前端随同一发布标签发布，检查一并覆盖两者。
+	up, newWeb, frontMissing, err := until.CheckNewVerWebAndFront(oldWeb)
 
 	if err != nil {
 		// up=true 且带错：新版确实存在，但**跨了大版本/大改动**，只能换镜像。
@@ -68,31 +68,14 @@ func UpdataCheckWeb() dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "检查更新失败: " + err.Error(), Type: "danger"}
 	}
 	if up {
-		return dto.ReturnJsonDto{Code: 1, Msg: "管理系统有新版本: " + newWeb, Type: "success"}
-	}
-	return dto.ReturnJsonDto{Code: 2, Msg: "当前已是最新版本", Type: "success"}
-}
-
-// UpdataCheckFront 检查前端产物（webdist）是否有新版本。
-func UpdataCheckFront(req dto.UpdataCheckFrontReq) dto.ReturnJsonDto {
-	local := strings.TrimSpace(req.Version)
-	if local == "" {
-		return dto.ReturnJsonDto{Code: 0, Type: "warning",
-			Msg: "未能确定当前前端版本，请强制刷新页面后重试；若仍失败请更新镜像"}
-	}
-
-	up, newVer, err := until.CheckNewVerFront(local)
-
-	if err != nil {
-		// up=true 且带错：新版确实存在，但这次发布没带前端整包（或跨了大改动），
-		// 只能换镜像。用 warning = 「到此为止」的提示，前端不会继续下载。
-		if up {
-			return dto.ReturnJsonDto{Code: 0, Msg: err.Error(), Type: "warning"}
+		// 发布缺前端整包：api 即便有新版也无法做到「同时更新」，提示更新镜像。
+		if frontMissing {
+			return dto.ReturnJsonDto{Code: 0,
+				Msg: "检测到新版本 " + newWeb + "，但发布未提供前端整包，无法与管理" +
+					"系统同时更新，请更新镜像",
+				Type: "warning"}
 		}
-		return dto.ReturnJsonDto{Code: 0, Msg: "检查更新失败: " + err.Error(), Type: "danger"}
-	}
-	if up {
-		return dto.ReturnJsonDto{Code: 1, Msg: "前端有新版本: " + newVer, Type: "success"}
+		return dto.ReturnJsonDto{Code: 1, Msg: "管理系统与前端有新版本: " + newWeb, Type: "success"}
 	}
 	return dto.ReturnJsonDto{Code: 2, Msg: "当前已是最新版本", Type: "success"}
 }
@@ -169,18 +152,6 @@ func UpdataDownEngine() dto.ReturnJsonDto {
 	}
 	if up {
 		return dto.ReturnJsonDto{Code: 1, Msg: "引擎新版本: " + newVer, Type: "success"}
-	}
-	return dto.ReturnJsonDto{Code: 0, Msg: "下载失败", Type: "danger"}
-}
-
-// UpdataDownFront 下载前端整包到待安装区（/config/updata）。
-func UpdataDownFront() dto.ReturnJsonDto {
-	up, newVer, err := until.DownloadAndVerifyFront()
-	if err != nil {
-		return downErrDto(err)
-	}
-	if up {
-		return dto.ReturnJsonDto{Code: 1, Msg: "前端新版本: " + newVer, Type: "success"}
 	}
 	return dto.ReturnJsonDto{Code: 0, Msg: "下载失败", Type: "danger"}
 }

@@ -401,19 +401,31 @@ func TestIsMytvBaseReleaseRequiresContractAssets(t *testing.T) {
 }
 
 // TestStageUpdataReportsMissingAsset 资产名是**跨仓契约**：CI 发布的名字与这里
+// 必须逐字一致，缺失时要报错并点出具体资产名（含校验清单本身）。
+// 每个用例自带 assets 映射：测"资产缺失"时清单在、但资产不在；
+// 测"清单缺失"时资产都在、但清单不在 —— 这样两条报错分支都能被真正走到。
 func TestStageUpdataReportsMissingAsset(t *testing.T) {
 	rel := &githubRelease{TagName: "v1.2.3"}
-	for _, names := range [][]string{
-		{"iptv_amd64", "SHA256SUMS.txt", "iptv"},
-		{frontAssetName, "SHA256SUMS.txt", frontAssetName},
-		{"engine_amd64", "SHA256SUMSEngine.txt", "engine"},
+	for _, tc := range []struct {
+		assets map[string]string
+		sums   string
+		pairs  [][2]string
+		miss   string // 期望错误信息点出的缺失资产名
+	}{
+		// 待下载资产缺失：清单在，但该资产不在发布里
+		{map[string]string{apiSumsName: "x"}, apiSumsName, [][2]string{{"iptv_amd64", "iptv"}}, "iptv_amd64"},
+		{map[string]string{apiSumsName: "x"}, apiSumsName, [][2]string{{frontAssetName, frontAssetName}}, frontAssetName},
+		{map[string]string{engineSumsName: "x"}, engineSumsName, [][2]string{{"engine_amd64", "engine"}}, "engine_amd64"},
+		// 清单本身缺失：资产都在，但发布没有校验清单
+		{map[string]string{"iptv_amd64": "x"}, apiSumsName, [][2]string{{"iptv_amd64", "iptv"}}, apiSumsName},
+		{map[string]string{"engine_amd64": "x"}, engineSumsName, [][2]string{{"engine_amd64", "engine"}}, engineSumsName},
 	} {
-		_, _, err := stageUpdata(rel, map[string]string{}, names)
+		_, _, err := stageUpdata(rel, tc.assets, tc.sums, tc.pairs)
 		if err == nil {
-			t.Fatalf("资产缺失时应报错（%s）", names[0])
+			t.Fatalf("资产/清单缺失时应报错（%s）", tc.miss)
 		}
-		if !strings.Contains(err.Error(), names[0]) {
-			t.Fatalf("错误信息应点出缺失的资产名 %s，实际：%v", names[0], err)
+		if !strings.Contains(err.Error(), tc.miss) {
+			t.Fatalf("错误信息应点出缺失的资产名 %s，实际：%v", tc.miss, err)
 		}
 	}
 }

@@ -23,15 +23,6 @@ func UpdataCheckWeb(c *gin.Context) {
 	reply(c, service.UpdataCheckWeb())
 }
 
-// UpdataCheckFront 检查前端产物（webdist）是否有新版本。
-func UpdataCheckFront(c *gin.Context) {
-	var req dto.UpdataCheckFrontReq
-	if !bindJSON(c, &req) {
-		return
-	}
-	reply(c, service.UpdataCheckFront(req))
-}
-
 // UpdataCheckEngine 检查授权引擎是否有新版本。
 func UpdataCheckEngine(c *gin.Context) {
 	reply(c, service.UpdataCheckEngine())
@@ -40,11 +31,6 @@ func UpdataCheckEngine(c *gin.Context) {
 // UpdataDownWeb 下载管理系统新版本到本地待安装区。
 func UpdataDownWeb(c *gin.Context) {
 	reply(c, service.UpdataDownWeb())
-}
-
-// UpdataDownFront 下载前端整包到本地待安装区。
-func UpdataDownFront(c *gin.Context) {
-	reply(c, service.UpdataDownFront())
 }
 
 // UpdataDownEngine 下载授权引擎新版本到本地待安装区。

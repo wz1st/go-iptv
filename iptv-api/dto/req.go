@@ -39,13 +39,6 @@ type MyTVBuildReq struct {
 	UpBody     string `json:"upBody"`
 }
 
-// 在线升级  POST /api/updata/checkFront
-
-// UpdataCheckFrontReq 是前端自报的版本号。
-type UpdataCheckFrontReq struct {
-	Version string `json:"version"`
-}
-
 // 设备列表  /api/users
 
 type UsersMarksReq struct {

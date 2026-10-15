@@ -197,10 +197,8 @@ var adminRoutes = []apiRoute{
 	// --- 在线升级 ---
 	{"updata/data", api.UpdataData},
 	{"updata/checkWeb", api.UpdataCheckWeb},
-	{"updata/checkFront", api.UpdataCheckFront},
 	{"updata/checkEngine", api.UpdataCheckEngine},
 	{"updata/downWeb", api.UpdataDownWeb},
-	{"updata/downFront", api.UpdataDownFront},
 	{"updata/downEngine", api.UpdataDownEngine},
 	{"updata/run", api.Updata},
 
