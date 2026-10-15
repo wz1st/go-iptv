@@ -39,7 +39,7 @@ func MytvApkInfo() dto.AdminClientMyTVDto {
 		Title:       "MyTV客户端设置",
 		BaseVersion: base,
 		BasePkg:     until.MytvFactoryPackage(),
-		// serverUrl 是 mytv 独立的 APK 连接地址（不与骆驼共用），见 configDto.MyTV。
+		// serverUrl 是 mytv 独立的 APK 连接地址（不与清和共用），见 configDto.MyTV。
 		ServerUrl: MytvServerUrl(cfg),
 		Update:    cfg.MyTV.Update,
 		Status:    BuildStatus,
@@ -59,7 +59,7 @@ func MytvApkInfo() dto.AdminClientMyTVDto {
 	}
 }
 
-// MytvServerUrl 取 mytv 独立连接地址；老配置没存过时回退骆驼的 cfg.ServerUrl
+// MytvServerUrl 取 mytv 独立连接地址；老配置没存过时回退清和的 cfg.ServerUrl
 // （与引擎 BuildMyTVApk 里的回退一致），保证升级后不编译也能拿到可用地址。
 func MytvServerUrl(cfg *dto.Config) string {
 	if cfg.MyTV.ServerUrl != "" {
@@ -185,7 +185,7 @@ func GetMyTVBuildStatus() dto.ReturnJsonDto {
 	return dto.ReturnJsonDto{Code: 1, Msg: "APK编译完成", Type: "success", Data: data}
 }
 
-// PublishMytvAPK 把「待发布」的包提升成线上版本 —— 与骆驼 PublishAPK 同一语义。
+// PublishMytvAPK 把「待发布」的包提升成线上版本 —— 与清和 PublishAPK 同一语义。
 func PublishMytvAPK() dto.ReturnJsonDto {
 	if BuildStatus == 1 {
 		return dto.ReturnJsonDto{Code: 0, Msg: "正在打包中，请稍后再试", Type: "danger"}

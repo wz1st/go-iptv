@@ -113,10 +113,21 @@ func (fc *FileCache) Exists(key string) bool {
 	return true
 }
 
-// Fresh 判断缓存是否存在且未超过 ttl。
+// 判断缓存是否存在
+func (fc *FileCache) ChannelExists(key string) bool {
+	path := filepath.Join(fc.Dir, key)
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// Fresh 判断缓存是否存在且写入时间距今不超过 ttl。
 //
-// 与 Exists 的区别：Exists 只判"跨天"，同一份当天缓存可以一直用到午夜，
-// 而 simple 接口需要在同一天内也能识别"这份缓存已经陈旧"。
+// 缓存里混着两类数据，用同一个过期口径会错：
+// program 数组是当天节目表，整天不变，按天过期是对的；
+// isLive / liveSt 是「此刻正在播」，每分钟都在变 —— 按天过期会让
+// simple 接口整天返回早上的那条（实测 09:15 仍回 06:00 朝闻天下）。
+//
+// 所以简单接口改走本方法：ttl 到点就重新拉，不拿旧的在播状态顶。
 func (fc *FileCache) Fresh(key string, ttl time.Duration) bool {
 	path := filepath.Join(fc.Dir, key)
 	info, err := os.Stat(path)
@@ -127,13 +138,6 @@ func (fc *FileCache) Fresh(key string, ttl time.Duration) bool {
 		return false
 	}
 	return time.Since(info.ModTime()) < ttl
-}
-
-// 判断缓存是否存在
-func (fc *FileCache) ChannelExists(key string) bool {
-	path := filepath.Join(fc.Dir, key)
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // 删除缓存

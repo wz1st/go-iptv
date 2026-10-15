@@ -2,6 +2,7 @@ package router
 
 import (
 	"iptv-api/bootstrap"
+	"iptv-api/until"
 	"net/http"
 	"os"
 	"strings"
@@ -34,8 +35,14 @@ func InitRouter(debug bool) *gin.Engine {
 
 	// 静态资源目录：刻意注册在门禁之前，未安装时也可访问
 	r.Static("/app", "/config/app")
-	r.Static("/images", "/config/images/bj")
-	r.Static("/icon", "/config/images/icon")
+	// 上传素材按壳分两套（目录与 URL 前缀成对，口径在 until.ClientIconDir /
+	// until.ClientBgDir）：清和壳 /images/ 与 /icon/，骆驼壳 /lt/images/ 与
+	// /lt/icon/。骆驼壳**不能**挤在 /images/lt/ 下 ——那样会落进清和壳的
+	// alias 里，取到 /config/images/bj/lt/xxx.png。
+	r.Static("/images", until.ClientBgDir(until.ShellQh))
+	r.Static("/icon", until.ClientIconDir(until.ShellQh))
+	r.Static("/lt/images", until.ClientBgDir(until.ShellLt))
+	r.Static("/lt/icon", until.ClientIconDir(until.ShellLt))
 	r.Static("/logo", "/config/logo")
 	// /static 是下载页/登录页的品牌图与 README.md 里引用的收款码图片。
 	r.Static("/static", "/app/web/static")
@@ -88,8 +95,13 @@ func hasPathPrefix(path, base string) bool {
 // publicPrefixes 是「与安装态无关的公共资源」—— 任何安装状态下都放行。
 var publicPrefixes = []string{
 	"/static/", // README.md 里的收款码图片（仓库根 static/）
-	"/images/",
-	"/icon/",
+	"/images/", // 清和壳的背景图池
+	"/icon/",   // 清和壳的启动图标
+	// 骆驼壳（主槽位）的同一套素材。**必须单独列**：hasPathPrefix 是从头匹配，
+	// "/lt/images/" 不以 "/images/" 开头，漏了这条的症状是未安装态下骆驼壳的
+	// 预览图全是 403。
+	"/lt/images/",
+	"/lt/icon/",
 	"/logo/",
 	"/app/", // APK / MyTV 下载目录，前台下载页依赖
 }

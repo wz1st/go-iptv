@@ -156,6 +156,33 @@ var adminRoutes = []apiRoute{
 	{"client/publish", api.ClientPublish},
 	{"client/uploadIcon", api.ClientUploadIcon},
 	{"client/uploadBj", api.ClientUploadBj},
+	// 客户端编译基底三件套（与 mytv 同构，但流程全在 api 侧，不经引擎）：
+	// 上传基包（multipart，字段名 apkfile）→ 校验包名 → 落 /config/client；
+	// 在线检查/升级远端 client-vX.Y.Z 序列（见 until/clientOnline.go）。
+	// logo 与启动背景不进这里：它们是**编译期**打进包的 drawable，
+	// 由后台的「上传图标 / 上传背景」提供，缺省则保留基包自带的默认图。
+	{"client/uploadBaseApk", api.ClientUploadBaseApk},
+	{"client/checkBase", api.ClientCheckBase},
+	{"client/upgradeBase", api.ClientUpgradeBase},
+
+	// 骆驼壳（独立客户端基底）：与 清和壳 各自一组路由，编译接口共用 BuildClientApk。
+	{"client/lt/data", api.LuotuoData},
+	{"client/lt/appInfo", api.LuotuoAppInfo},
+	// 与清和壳同一个 handler：探测的是「编译时真正会用的那个路由」，
+	// 差别由地址本身决定（清和 /apk/getver、骆驼 /apk/lt/getver）。
+	{"client/lt/testUrl", api.ClientTestUrl},
+	{"client/lt/buildStatus", api.LuotuoBuildStatus},
+	{"client/lt/publish", api.LuotuoPublish},
+	{"client/lt/uploadBaseApk", api.LuotuoUploadBaseApk},
+	{"client/lt/checkBase", api.LuotuoCheckBase},
+	{"client/lt/upgradeBase", api.LuotuoUpgradeBase},
+	// 图标 / 背景也按壳分两套：上面那组 /api/client/{uploadIcon,…} 只动清和壳的
+	// 素材目录，骆驼壳走这四个（目录 /config/images/lt/*，URL 前缀 /lt/images、
+	// /lt/icon）。**故意不共用**的判据见 api.LuotuoUploadIcon 的注释。
+	{"client/lt/uploadIcon", api.LuotuoUploadIcon},
+	{"client/lt/uploadBj", api.LuotuoUploadBj},
+	{"client/lt/deleteIcon", api.LuotuoDeleteIcon},
+	{"client/lt/deleteBj", api.LuotuoDeleteBj},
 
 	// 编译基底（底包）：独立于 apk 版本的 client-vX.Y.Z 序列。
 	// uploadBaseApk 是 multipart，字段名 apkfile。

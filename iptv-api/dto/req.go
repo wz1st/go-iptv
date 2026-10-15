@@ -67,7 +67,7 @@ type MealsSaveReq struct {
 	IDList []string `json:"ids"`
 }
 
-// 骆驼客户端设置  /api/client
+// 清和客户端设置  /api/client
 
 type ClientDeleteBjReq struct {
 	Name string `json:"name"`

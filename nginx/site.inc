@@ -110,6 +110,19 @@ location ^~ /icon/ {
     access_log off;
     expires 7d;
 }
+# 骆驼壳（主槽位）的同一套素材，整棵子树独立放在 /config/images/lt 下。
+# **不能**写成 /images/lt/ —— 那样它会落进上面 /images/ 的 alias 里，
+# 实际去取 /config/images/bj/lt/xxx.png，表现为"后台上传成功、客户端拿不到图"。
+location ^~ /lt/images/ {
+    alias /config/images/lt/bj/;
+    access_log off;
+    expires 7d;
+}
+location ^~ /lt/icon/ {
+    alias /config/images/lt/icon/;
+    access_log off;
+    expires 7d;
+}
 location ^~ /logo/ {
     alias /config/logo/;
     access_log off;

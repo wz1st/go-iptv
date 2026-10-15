@@ -167,39 +167,36 @@ func getEpgCntv(name string) dto.ApkResponse {
 	}
 
 	if epgData, ok := jsonMap[name]; ok {
-		dataList := []dto.Program{}
-		pos := 0
-
-		if len(epgData["program"].([]interface{})) <= 0 {
+		// 断言失败会 panic。用逗号-ok 一次拿全，取不到就当空数组。
+		programs, _ := epgData["program"].([]interface{})
+		if len(programs) <= 0 {
 			res.Data = []dto.Program{}
 			return res
 		}
+
 		// 用统一的站点时区，而不是"先看容器是不是 UTC、是就手动 +8"。
 		loc := until.EPGLocation()
 		now := time.Now().In(loc)
 		nowTime := now.Format("15:04")
-		for _, item := range epgData["program"].([]interface{}) {
+
+		dataList := make([]dto.Program, 0, len(programs))
+		pos := 0
+		for _, item := range programs {
 			dataMap, ok := item.(map[string]interface{})
 			if !ok {
 				continue
 			}
-			// 断言失败会直接 panic（CNTV 偶尔会漏字段），用逗号-ok 降级成空值。
 			title, _ := dataMap["t"].(string)
 			if title == "" {
 				continue
 			}
 
-			start := cntvProgrammeTime(dataMap, loc)
-			// 取不到开播时刻的条目必须丢掉，不能带着空 starttime 发出去：
-			// 客户端解析节目单时会整条丢弃解析失败的项，
-			// 于是表现为「接口返回 33 条、客户端一条都显示不出来」。
-			if start == "" {
-				continue
-			}
-
 			data := dto.Program{}
 			data.Name = title
-			data.StartTime = start
+			data.StartTime = cntvProgrammeTime(dataMap, loc)
+			if data.StartTime == "" {
+				continue
+			}
 
 			data.Pos = len(dataList)
 			dataList = append(dataList, data)
@@ -254,7 +251,7 @@ func getSimpleEpgCntv(name string) dto.SimpleResponse {
 	var jsonMap map[string]map[string]interface{}
 	readCacheOk := false
 
-	// 这里必须用 Fresh（带 TTL）而不是 Exists（只判跨天）。
+	// 这里必须用**分钟级 TTL**，不能沿用 getEpgCntv 的按天缓存。
 	//
 	// CNTV 同一份响应里混了两种性质完全不同的数据：
 	// - program 数组是「当天节目表」，整天不变，按天缓存正确；
@@ -321,7 +318,7 @@ func getSimpleEpgCntv(name string) dto.SimpleResponse {
 
 // currentCntvProgramme 从 CNTV 的 program 数组里找"此刻正在播"的一条。
 //
-// 判定：开播时刻已过，且（有结束时刻时）尚未结束。同一时刻命中多条时取开播最晚的，
+// 判定：开播时刻已过，且（有结束时刻时）尚未结束。同一时刻命中多条时取开播更晚的，
 // 与 getSimpleEpg 的选法一致 —— 重播/连播时段里前一条可能已结束，取错会让界面停在上一集。
 func currentCntvProgramme(epgData map[string]interface{}, loc *time.Location) (dto.Program, bool) {
 	items, _ := epgData["program"].([]interface{})
