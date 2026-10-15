@@ -184,24 +184,6 @@ var adminRoutes = []apiRoute{
 	{"client/lt/deleteIcon", api.LuotuoDeleteIcon},
 	{"client/lt/deleteBj", api.LuotuoDeleteBj},
 
-	// 编译基底（底包）：独立于 apk 版本的 client-vX.Y.Z 序列。
-	// uploadBaseApk 是 multipart，字段名 apkfile。
-	{"client/uploadBaseApk", api.ClientUploadBaseApk},
-	{"client/checkBase", api.ClientCheckBase},
-	{"client/upgradeBase", api.ClientUpgradeBase},
-
-	// 骆驼壳（独立客户端基底）：与 清和壳 各自一组路由，编译接口共用 BuildClientApk。
-	{"client/lt/data", api.LuotuoData},
-	{"client/lt/appInfo", api.LuotuoAppInfo},
-	// 与清和壳同一个 handler：探测的是「编译时真正会用的那个路由」，
-	// 差别由地址本身决定（清和 /apk/getver、骆驼 /apk/lt/getver）。
-	{"client/lt/testUrl", api.ClientTestUrl},
-	{"client/lt/buildStatus", api.LuotuoBuildStatus},
-	{"client/lt/publish", api.LuotuoPublish},
-	{"client/lt/uploadBaseApk", api.LuotuoUploadBaseApk},
-	{"client/lt/checkBase", api.LuotuoCheckBase},
-	{"client/lt/upgradeBase", api.LuotuoUpgradeBase},
-
 	// 公告：它保存的就是客户端启动时弹出的那条文案（显示时长、显示间隔都是
 	{"client/noticeData", api.NoticeData},
 	{"client/noticeSave", api.Notice},
