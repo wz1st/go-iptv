@@ -127,6 +127,7 @@ var adminRoutes = []apiRoute{
 	{"client/appInfo", api.ClientAppInfo},
 	// 「保存并测试」拆两步：这一步只测可达性，不落盘、不触发编译。
 	{"client/testUrl", api.ClientTestUrl},
+	{"client/saveUrl", api.ClientSaveUrl},
 	{"client/tipSet", api.ClientTipSet},
 	{"client/buildStatus", api.BuildStatus},
 	{"client/publish", api.ClientPublish},
@@ -147,6 +148,7 @@ var adminRoutes = []apiRoute{
 	// 与清和壳同一个 handler：探测的是「编译时真正会用的那个路由」，
 	// 差别由地址本身决定（清和 /apk/getver、骆驼 /apk/lt/getver）。
 	{"client/lt/testUrl", api.ClientTestUrl},
+	{"client/lt/saveUrl", api.ClientSaveUrl},
 	{"client/lt/buildStatus", api.LuotuoBuildStatus},
 	{"client/lt/publish", api.LuotuoPublish},
 	{"client/lt/uploadBaseApk", api.LuotuoUploadBaseApk},

@@ -18,4 +18,11 @@ package until
 // 顶层（无 data 外壳），前端误读 res.data 导致全部回落默认值。
 // v4.4.4：在线升级合并 —— 点「管理系统更新」时 api 与前端(webdist)随同一
 // 发布标签一起下载、一起生效；移除前端独立的「检查 / 更新」入口。
-var Version = "v4.4.4"
+// v4.4.5：「测试APK地址」探测失败时若因地址为 IPv6（字面量或域名解析到 IPv6）
+// 而容器/内网无 IPv6 导致假阴性，明确提示并允许强制保存；测试通过或强制保存
+// 均立即把地址落盘（写 config.yml，不触发编译）。
+// v4.4.6：apk/订阅 给客户端返回服务端地址时严格落实"以请求 host+path 为准、
+// 不以 cfg.ServerUrl 为准"——clientBase 增加请求 path 合法性校验；adminBase 的
+// 兜底回落改为按壳分流（骆驼 /apk/lt 回落 server_url_lt、清和回落 server_url），
+// 避免骆驼壳在请求 host 非法时拿到清和站的下载/数据地址。
+var Version = "v4.4.6"

@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"iptv-api/bootstrap"
 	"iptv-api/dao"
 	"iptv-api/dto"
 	"iptv-api/until"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -206,6 +208,23 @@ func TestServerURL(req dto.ClientTestUrlReq) dto.ReturnJsonDto {
 
 	resp, err := client.Get(probe)
 	if err != nil {
+		// 连接失败：先判断是不是「目标地址是 IPv6（字面量或域名解析到 IPv6），
+		// 但后台这个探测容器 / 内网没有 IPv6」造成的假阴性。是的话给明确提示
+		// 并让前端弹「强制保存」—— 客户端设备（有 IPv6）其实能连上，
+		// 只是后台这个探测容器连不上，不该因此拦住用户保存。
+		if isIPv6ConnectFailure(base) {
+			return dto.ReturnJsonDto{
+				Code: 0,
+				Msg:  "当前因地址为ipv6导致测试失败可能无法连接",
+				Type: "ipv6",
+				Data: map[string]any{
+					"ipv6":     true,
+					"shell":    shell,
+					"probeUrl": probe,
+					"stored":   base, // 实际会存进 config.yml 的值（已剥 path）
+				},
+			}
+		}
 		return dto.ReturnJsonDto{
 			Code: 0,
 			Msg:  "无法连接：" + err.Error(),
@@ -238,6 +257,92 @@ func TestServerURL(req dto.ClientTestUrlReq) dto.ReturnJsonDto {
 			"stored":   base, // 实际会存进 config.yml 的值（已剥 path）
 		},
 	}
+}
+
+// isIPv6ConnectFailure 判断「连接失败」是不是「目标地址是 IPv6（字面量或域名解析到
+// IPv6），而运行探测的后台容器 / 内网没有 IPv6」造成的假阴性。
+//
+// 判定口径：
+//   - 字面量 IPv6（如 http://[::1]/、http://fe80::1/）→ 直接算 IPv6。
+//   - 域名：查 AAAA。若**只有 AAAA 没有 A**（纯 IPv6 域名）→ 算 IPv6；
+//     若同时有 A 和 AAAA → 再发一次**强制走 IPv4** 的探测，IPv4 能通就说明
+//     默认探测挂掉是因为先试了 IPv6、容器没 IPv6，算 IPv6；IPv4 也不通则是真不可达，不算。
+//
+// 这些额外探测都是短超时（交互按钮，不是长任务）；解析/连接异常就保守地当作「非 IPv6 失败」。
+func isIPv6ConnectFailure(base string) bool {
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	// url.Hostname() 对 IPv6 字面量会自动去掉方括号（[::1] -> ::1）。
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.To4() == nil // To4()==nil 说明是 IPv6
+	}
+
+	// 域名：解析 AAAA。
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil || len(addrs) == 0 {
+		return false
+	}
+	hasV4, hasV6 := false, false
+	for _, a := range addrs {
+		if a.IP.To4() != nil {
+			hasV4 = true
+		} else {
+			hasV6 = true
+		}
+	}
+	if hasV6 && !hasV4 {
+		return true // 纯 IPv6 域名
+	}
+	if hasV6 && hasV4 {
+		// 强制走 IPv4 探一次：能通 ⇒ 默认失败是 IPv6 那条挂了。
+		return dialTCP4(ctx, u)
+	}
+	return false
+}
+
+// dialTCP4 用强制 IPv4 的 dialer 试连目标主机，验证「IPv4 这条路是通的」。
+func dialTCP4(ctx context.Context, u *url.URL) bool {
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	d := net.Dialer{Timeout: 4 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp4", net.JoinHostPort(u.Hostname(), port))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// SaveServerURL 只把「APK连接地址」落到 config.yml，**不触发编译**。
+// 与 SetAppInfo（落盘 + 后台编译）分开：测试通过或用户「强制保存」时调用它，
+// 让地址即时持久化（刷新页面不丢、下次编译即用），又不把分钟级的编译队列打满。
+func SaveServerURL(req dto.ClientTestUrlReq) dto.ReturnJsonDto {
+	raw := strings.TrimSpace(req.ServerUrl)
+	if raw == "" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "请先填写连接地址", Type: "danger"}
+	}
+	base := bootstrap.NormalizeServerURL(raw)
+	if base == "" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "地址不合法", Type: "danger"}
+	}
+	cfg := dao.GetConfig()
+	if cfg.ServerUrl == base {
+		return dto.ReturnJsonDto{Code: 1, Msg: "地址未变化，已是最新", Type: "success", Data: map[string]any{"stored": base}}
+	}
+	cfg.ServerUrl = base
+	dao.SetConfig(cfg)
+	return dto.ReturnJsonDto{Code: 1, Msg: "地址已保存", Type: "success", Data: map[string]any{"stored": base}}
 }
 
 // SetAppInfo 编译一个新版本 —— 注意它**只产出待发布包**，不动线上任何东西。
