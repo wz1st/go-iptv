@@ -99,6 +99,7 @@ type ClientTipSetReq struct {
 	UserNoReg     string `json:"userNoReg"`
 }
 
+// ClientTestUrlReq 是「保存并测试」里那条可达性探测的请求体。
 // ClientAdInfoReq 是客户端退出弹窗里的「广告内容」—— 仅定制授权可写。
 type ClientAdInfoReq struct {
 	AdInfo string `json:"adInfo"`

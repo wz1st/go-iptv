@@ -83,3 +83,46 @@ func TestFixedPackageLt_MatchesLuotuoBase(t *testing.T) {
 		t.Fatalf("FixedPackageLt = %q，与骆驼壳基包（xyz.qingh.lutuo）对不上", FixedPackageLt)
 	}
 }
+
+// AesKeyForShell：密钥公式里的应用名用**上报值**，不再用 config.yml 的 build.name。
+// 这正是 18098 验证容器骆驼壳"登录错误"的根因修复 —— 基包 app_name="骆驼"、
+// 后台 build_lt.name="骆驼电视"，服务端若用后者会算出一把客户端解不开的钥匙
+// （客户端用 getApplicationLabel() 当密钥输入 E，两侧必须逐字一致）。
+func TestAesKeyForShell_UsesReportedAppName(t *testing.T) {
+	// 骆驼壳：上报 "骆驼" 必须得到 AesKeyOf("骆驼", FixedPackageLt)，与客户端自己算的逐字一致。
+	if got, want := AesKeyForShell("骆驼", true), AesKeyOf("骆驼", FixedPackageLt); got != want {
+		t.Fatalf("AesKeyForShell(%q,true)=%s，期望 AesKeyOf(%q,FixedPackageLt)=%s", "骆驼", got, "骆驼", want)
+	}
+	// 关键回归：用上报名与用后台名必须得到**不同**的钥匙（否则说明又在用 config 名）。
+	if AesKeyForShell("骆驼", true) == AesKeyOf("骆驼电视", FixedPackageLt) {
+		t.Fatal("AesKeyForShell 退回了 config.yml 的应用名 —— 上报值没被用上")
+	}
+	// 清和壳同理：上报名进公式，包名取 FixedPackage。
+	if got, want := AesKeyForShell("清和电视", false), AesKeyOf("清和电视", FixedPackage); got != want {
+		t.Fatalf("AesKeyForShell(%q,false)=%s，期望 %s", "清和电视", got, want)
+	}
+	// 两个壳即便上报同一个应用名，也必须因包名不同而得到不同密钥。
+	if AesKeyForShell("同名", true) == AesKeyForShell("同名", false) {
+		t.Fatal("同名不同壳得到了同一把密钥 —— 按壳分流的前提被破坏")
+	}
+}
+
+// IsLuotuoPackage：包名是壳标识的**主判据**；空串 / 异包都不得误判为骆驼。
+func TestIsLuotuoPackage(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{FixedPackageLt, true},
+		{" " + FixedPackageLt + " ", true}, // 前后空白要 TrimSpace
+		{FixedPackage, false},              // 清和壳包名不是骆驼
+		{"", false},                        // 未上报
+		{"com.eztv.powerful", false},       // 基包原始包名（未改 applicationId 前）
+		{"xyz.qingh.lutuo.evil", false},    // 前缀相同但不是整串相等
+	}
+	for _, c := range cases {
+		if got := IsLuotuoPackage(c.in); got != c.want {
+			t.Errorf("IsLuotuoPackage(%q)=%v，期望 %v", c.in, got, c.want)
+		}
+	}
+}

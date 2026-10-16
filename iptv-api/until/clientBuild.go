@@ -277,16 +277,24 @@ func rewriteClientResources(workDir string, v ClientBuildValues) error {
 // 以及 EPG、天气两处的字面量，三处都是 `const-string vN, "…/iptv…"`。
 // Gradle 那套 resValue 注入在它身上不存在，改 strings.xml 一个字都到不了。
 //
-// ## 为什么替换数必须 > 0
+// ## 注入点怎么认：整条串必须**就是一个站点地址**
 //
-// 正则匹配不上时若静默放过，编出来的包会**指向基底里写死的那个地址**：
-// 编译成功、装得上、连不上 —— 而服务端日志里看不出任何异常。
-// 早先那版实现（a64184d 的 replaceHost）只把匹配结果写回文件、不判命中数，
-// 正是这种「假绿」。所以这里命中 0 次就直接报错。
+// 早期正则只写 `(const-string\s+[vp]\d+,\s*").*/iptv`，靠「以 /iptv 结尾」认地址。
+// 骆驼壳基底的地址早已改成 `<站点>/apk/lt`（后面再接 /getepg、/weather），
+// 于是那条正则一个真地址都匹配不到，转而命中了 `PlayerActivity$50` 里
+// 「我在使用清和iptv管理系统,感觉非常好用 https://github.com/wz1st/iptv」
+// 这条**分享文案** —— 命中数 1 ≠ 0，闸门放行，编出来的包仍指向基底里写死的
+// 旧地址。表现是「编译成功、装得上、连不上」，而服务端日志毫无异常。
 //
-// 正则与旧实现同形：匹配以 `/iptv` 结尾的 const-string，
-// 把 `/iptv` 之前的部分整体换成 ServerURL（它已含 `/apk` 段）。
-// 于是 `…/iptv` → `…/apk`，`…/iptv/getepg` → `…/apk/getepg`。
+// 所以现在要求整条字面量满足两条：①以 `http://` 或 `https://` 开头（分享文案
+// 以中文开头）；②路径以 `/iptv`（历史基址形态）或 `/apk/lt`（现行形态）结尾。
+// 只认 `/iptv` 是历史兼容，仍可能有旧基底在用。
+//
+// ## 为什么替换后还要再扫一遍
+//
+// 替换只认「像地址的串」，一旦基底换了地址形态而这里没跟上，就会再次退化成
+// 「命中 0 或命中错串」。所以替换后再全量扫一遍：还有形如地址却没被换掉的
+// const-string 就直接报错，把「编出一个指向别处的包」挡在编译阶段。
 func patchClientHostInSmali(workDir, serverURL string) error {
 	host := strings.TrimRight(strings.TrimSpace(serverURL), "/")
 	if host == "" {
@@ -294,7 +302,9 @@ func patchClientHostInSmali(workDir, serverURL string) error {
 	}
 	// 替换串里的 `$` 在 regexp 展开里有特殊含义，先转义。
 	repl := strings.ReplaceAll(host, "$", "$$")
-	re := regexp.MustCompile(`(const-string\s+[vp]\d+,\s*").*/iptv`)
+	// ${1} 是 const-string 的寄存器与引号部分；地址本体整条换成 host，
+	// 后面跟的 /getepg、/weather 之类后缀原样保留。
+	re := regexp.MustCompile(`(const-string\s+[vp]\d+,\s*")https?://[^\s"]*?/(?:iptv|apk/lt)`)
 	smaliDir := filepath.Join(workDir, "smali")
 	hits := 0
 	err := filepath.WalkDir(smaliDir, func(path string, d os.DirEntry, err error) error {
@@ -320,10 +330,48 @@ func patchClientHostInSmali(workDir, serverURL string) error {
 	}
 	if hits == 0 {
 		return fmt.Errorf(
-			"骆驼壳基底的 smali 里找不到以 /iptv 结尾的 const-string（地址注入点），" +
+			"骆驼壳基底的 smali 里找不到服务端地址字面量（注入点应形如 " +
+				"const-string v0, \"https://站点/apk/lt\"，历史形态为 \"…/iptv\"），" +
 				"这不是一份可从 smali 注入地址的骆驼壳基底")
 	}
+	// 反向断言：还有「像地址却没被换掉」的 const-string，说明地址形态与本函数
+	// 不同步 —— 这种包能编译、能安装，只是连的不是这个服务端。
+	leftover := findUnpatchedHostLiterals(smaliDir, host)
+	if len(leftover) > 0 {
+		return fmt.Errorf(
+			"骆驼壳基底的 smali 里还有 %d 处地址字面量没被替换成 %s，例如 %s；"+
+				"这会编出指向别处的包", len(leftover), host, leftover[0])
+	}
 	return nil
+}
+
+// findUnpatchedHostLiterals 找「是站点地址、却不是以 host 打头」的 const-string。
+//
+// 判定用 `HasPrefix(lit, host)` 而不是 `lit == host`：骆驼壳的地址常带子路径
+// （`<host>/getepg`、`<host>/weather`），那是**正确形态**，不是残留。
+//
+// 扫描用的正则是替换用的**超集**（多认 `const-string/jumbo`）。这一点是这道
+// 断言的全部价值：只要扫得到、却没被替换成 host 打头的字面量，就说明基底的
+// 地址写法超出了本函数的处理能力 —— 那张包能编译、能安装，只是连向别处。
+func findUnpatchedHostLiterals(smaliDir, host string) []string {
+	re := regexp.MustCompile(`const-string(?:/jumbo)?\s+[vp]\d+,\s*"(https?://[^\s"]*?/(?:iptv|apk/lt)[^"]*)"`)
+	var out []string
+	_ = filepath.WalkDir(smaliDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(path) != ".smali" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		for _, m := range re.FindAllSubmatch(data, -1) {
+			if lit := string(m[1]); !strings.HasPrefix(lit, host) {
+				out = append(out, lit)
+			}
+		}
+		return nil
+	})
+	return out
 }
 
 // resValueDirs 列出可能持有 strings.xml 的资源目录。

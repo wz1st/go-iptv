@@ -82,6 +82,17 @@ func ClientTestUrl(c *gin.Context) {
 	reply(c, service.TestServerURL(req))
 }
 
+// ClientSaveUrl 只把「APK连接地址」持久化到 config.yml，**不触发编译**。
+// 给「测试通过」和「IPv6 假阴性时强制保存」两条路径用：地址即时落盘
+// （刷新不丢、下次编译即用），但绝不再顺手编译。
+func ClientSaveUrl(c *gin.Context) {
+	var req dto.ClientTestUrlReq
+	if !bindJSON(c, &req) {
+		return
+	}
+	reply(c, service.SaveServerURL(req))
+}
+
 // ClientTipSet 保存客户端各类提示文案。
 func ClientTipSet(c *gin.Context) {
 	var req dto.ClientTipSetReq

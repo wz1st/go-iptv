@@ -256,8 +256,97 @@ func TestPatchClientHostInSmali_NoMatchIsFatal(t *testing.T) {
 	if err == nil {
 		t.Fatal("找不到注入点时必须报错")
 	}
-	if !strings.Contains(err.Error(), "/iptv") {
-		t.Errorf("报错应点名注入点特征，实际: %v", err)
+	if !strings.Contains(err.Error(), "/iptv") || !strings.Contains(err.Error(), "/apk/lt") {
+		t.Errorf("报错应点名两种注入点形态，实际: %v", err)
+	}
+}
+
+// 现行基底的地址形态是 `<站点>/apk/lt`（不是历史的 `/iptv`）。
+//
+// 这条是回归钉子：早期正则只认「以 /iptv 结尾」，对现行形态一个真地址都匹配
+// 不到，却命中了 PlayerActivity$50 里那条以中文开头的 GitHub 分享文案，
+// 命中数 1 ≠ 0 于是闸门放行 —— 编出来的包仍指向基底里写死的旧地址，
+// 表现为「编译成功、装得上、连不上」，服务端日志毫无异常。
+func TestPatchClientHostInSmali_RewritesApkLtLiterals(t *testing.T) {
+	work := t.TempDir()
+	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
+		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n"+
+			"    sput-object v0, Lcom/eztv/powerful/SplashActivity;->n:Ljava/lang/String;\n")
+	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity.smali",
+		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt/weather\"\n"+
+			"    const-string v0, \"https://iptv.qingh.xyz/apk/lt/getepg\"\n")
+	// 真实存在于骆驼壳里的分享文案：以中文开头，结尾恰好是 …/iptv。
+	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity$50.smali",
+		"    const-string v2, \"\\u6211\\u5728\\u4f7f\\u7528 https://github.com/wz1st/iptv\"\n")
+
+	if err := patchClientHostInSmali(work, "http://10.10.220.162:18098/apk/lt"); err != nil {
+		t.Fatalf("应能替换: %v", err)
+	}
+	splash, err := os.ReadFile(filepath.Join(work, "smali", "com", "eztv", "powerful", "SplashActivity.smali"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(splash), `"http://10.10.220.162:18098/apk/lt"`) {
+		t.Errorf("主地址未替换:\n%s", string(splash))
+	}
+	player, err := os.ReadFile(filepath.Join(work, "smali", "com", "eztv", "powerful", "PlayerActivity.smali"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"http://10.10.220.162:18098/apk/lt/weather"`,
+		`"http://10.10.220.162:18098/apk/lt/getepg"`,
+	} {
+		if !strings.Contains(string(player), want) {
+			t.Errorf("缺少 %s\n实际:\n%s", want, string(player))
+		}
+	}
+	if strings.Contains(string(player), "iptv.qingh.xyz") {
+		t.Errorf("旧站点地址残留:\n%s", string(player))
+	}
+	// 反向断言：分享文案必须原样保留 —— 它正是被误改过的那个串。
+	share, err := os.ReadFile(filepath.Join(work, "smali", "com", "eztv", "powerful", "PlayerActivity$50.smali"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(share), "https://github.com/wz1st/iptv") {
+		t.Errorf("分享文案里的 GitHub 地址被误改:\n%s", string(share))
+	}
+}
+
+// 替换完还有「是站点地址、却不是新 host 打头」的 const-string ⇒ 必须报错。
+//
+// 命中的串换了、漏网的串还在，比「一个都没换」更危险：前者看起来成功。
+// 用 const-string/jumbo 构造：替换用的正则不认这个指令宽度，扫描用的认，
+// 于是它就成了「漏网」—— 正是这道断言要拦的那类半新半旧。
+func TestPatchClientHostInSmali_JumboVariantIsFatal(t *testing.T) {
+	work := t.TempDir()
+	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
+		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n")
+	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity.smali",
+		"    const-string/jumbo v0, \"https://iptv.qingh.xyz/apk/lt/getepg\"\n")
+
+	err := patchClientHostInSmali(work, "http://10.10.220.162:18098/apk/lt")
+	if err == nil {
+		t.Fatal("有漏网的地址字面量时必须报错，不能编出半新半旧的包")
+	}
+	if !strings.Contains(err.Error(), "iptv.qingh.xyz") {
+		t.Errorf("报错应点名残留字面量，实际: %v", err)
+	}
+}
+
+// 带子路径的地址（<host>/getepg、<host>/weather）是**正确形态**，
+// 不是残留 —— 早期版本用 `lit != host` 判定，把它们全误报成漏网。
+func TestPatchClientHostInSmali_SubPathIsNotLeftover(t *testing.T) {
+	work := t.TempDir()
+	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
+		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n")
+	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity.smali",
+		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt/weather\"\n"+
+			"    const-string v0, \"https://iptv.qingh.xyz/apk/lt/getepg\"\n")
+
+	if err := patchClientHostInSmali(work, "http://10.10.220.162:18098/apk/lt"); err != nil {
+		t.Fatalf("子路径形态不该被判成残留: %v", err)
 	}
 }
 

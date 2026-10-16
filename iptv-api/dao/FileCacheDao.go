@@ -113,7 +113,7 @@ func (fc *FileCache) Exists(key string) bool {
 	return true
 }
 
-// 判断缓存是否存在
+// 判断缓存是否存在（忽略过期，用于配合Fresh 自行判定）
 func (fc *FileCache) ChannelExists(key string) bool {
 	path := filepath.Join(fc.Dir, key)
 	_, err := os.Stat(path)

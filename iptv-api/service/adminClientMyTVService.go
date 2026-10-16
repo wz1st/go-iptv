@@ -74,9 +74,8 @@ func SetMyTVAppInfo(req dto.MyTVBuildReq) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "正在打包中，请稍后再试", Type: "danger"}
 	}
 
-	// 定制分支：引擎被重新编号到 3.0 系列（引擎仓 tag 序列最高就是 v3.0.0），
-	// 所以这道"引擎最低版本"的闸门跟着降到 v3.0.0 —— 仍高于原来那两个
-	// v1.5.x 的门，mytv 编译所需的能力都在这版里。
+	// 版本门随引擎同步下调：引擎版本回退到 v3.0.0 后，v3.2.15 会把 velvet mytv 编译卡死
+	// （直到 CheckEngineVer 恒定报「该功能需要引擎最低版本为 v3.2.15」）。
 	_, err := until.CheckEngineVer("v3.0.0")
 	if err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: err.Error(), Type: "danger"}

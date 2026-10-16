@@ -98,10 +98,16 @@ func TestApkClientURLsUseRequestBase(t *testing.T) {
 		}
 	}
 
-	// ★ shell 必须真的由 isLuotuoShell 判定出来，不能写死一个壳。
-	if !strings.Contains(src, "if isLuotuoShell(c) {") {
-		t.Error("ApkLogin 的 shell 实参不是按 isLuotuoShell 判出来的 —— " +
-			"两个壳共用这个入口，写死就等于其中一个壳永远拿错地址")
+	// ★ shell 必须真的判出来，不能写死一个壳。判据是**包名上报优先**、
+	// 无包名上报才回落现有「路径判壳」（isLuotuoShell）—— 两个断言都要在，
+	// 少任何一个都意味着分流逻辑被简化成了单判据。
+	if !strings.Contains(src, "until.IsLuotuoPackage(user.Pkg)") {
+		t.Error("ApkLogin 没有按上报包名判壳 —— 包名与 applicationId 绑定，" +
+			"比路径/应用名都稳，应是第一判据")
+	}
+	if !strings.Contains(src, "lt = isLuotuoShell(c)") {
+		t.Error("ApkLogin 丢了路径判壳的兜底 —— 老客户端不上报包名时必须还能" +
+			"按 isLuotuoShell 分流，否则存量设备全走错壳")
 	}
 
 	// 反向断言：不许退回配置里的固定地址

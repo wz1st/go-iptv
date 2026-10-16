@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"iptv-api/dao"
+	"strings"
 )
 
 var Sale = "AD80F93B542B"
@@ -201,6 +202,43 @@ func GetAesKey() string {
 func GetAesKeyLt() string {
 	cfg := dao.GetConfig()
 	return AesKeyOf(cfg.BuildLt.Name, FixedPackageLt)
+}
+
+// IsLuotuoPackage 判断客户端上报的包名是不是**骆驼壳**。
+//
+// 包名是比应用名更稳的壳标识：应用名用户可在后台改、容易撞（见 TestApkLoginLuotuoShell*
+// 里"骆驼"≠"骆驼电视"那档事），包名与 applicationId 绑定、基本不可改。
+// 空串返回 false（表示"无法据此判定壳"，调用方需回落路由/应用名判据）。
+func IsLuotuoPackage(pkg string) bool {
+	p := strings.TrimSpace(pkg)
+	if p == "" {
+		return false
+	}
+	return p == FixedPackageLt
+}
+
+// AesKeyForShell 按壳取登录/频道密钥，但公式里的应用名用**客户端上报的 appName**，
+// 而不是 config.yml 里的 build.name。
+//
+// 为什么必须用能客户端上报的应用名：登录密钥 = AesKeyOf(appName, pkg)，客户端
+// 用的是它自己的 getApplicationLabel()（即它真实的 app_name，骆驼壳基包是 "骆驼"）。
+// 服务端若用 cfg.Build.Name/Lt.Name（骆驼壳后台配的是 "骆驼电视"），两侧密钥就不同，
+// 症状是"登录成功但内容乱码、客户端报登录错误"，服务端日志毫无异常。
+// 直接用上报的 appName 就从公式上保证两边逐字一致。
+//
+// appName 为空时回落 config.yml（极端：老客户端没报 appname），保持旧行为不回归。
+func AesKeyForShell(appName string, lt bool) string {
+	if strings.TrimSpace(appName) == "" {
+		if lt {
+			return GetAesKeyLt()
+		}
+		return GetAesKey()
+	}
+	pkg := FixedPackage
+	if lt {
+		pkg = FixedPackageLt
+	}
+	return AesKeyOf(appName, pkg)
 }
 
 func Md5Hex(s string) string {

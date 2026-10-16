@@ -66,6 +66,10 @@ type ApkUser struct {
 	Region   string `json:"region"`
 	NetType  string `json:"nettype"`
 	AppName  string `json:"appname"`
+	// Pkg 是客户端上报的**自己的包名**（如骆驼壳 xyz.qingh.lutuo、清和壳 xyz.qingh.qhtv）。
+	// 服务端据此分流比应用名更稳（包名与 applicationId 绑定，应用名可在后台改）。
+	// 不报（空串）时回落现有「路径判壳」逻辑（见 api.isLuotuoShell）。
+	Pkg string `json:"packagename"`
 }
 
 type ChannelListDto struct {
@@ -112,6 +116,9 @@ type DataReqDto struct {
 	// 为什么不靠路由判：骆驼壳请求的是登录下发给它的 dataurl，线上线下都存在
 	// `/apk/channels`（不带 `/lt`）的包，光看路径分不出调用方。
 	AppName string `json:"appname"`
+	// Pkg 是客户端上报的**自己的包名**（如骆驼壳 xyz.qingh.lutuo）。
+	// 分流优先级高于 AppName：报了包名就直接按包名判壳，否则回落 AppName + 路径。
+	Pkg string `json:"packagename"`
 }
 type Program struct {
 	Name      string `json:"name"`

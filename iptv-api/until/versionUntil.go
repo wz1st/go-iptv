@@ -18,5 +18,18 @@ package until
 // 顶层（无 data 外壳），前端误读 res.data 导致全部回落默认值。
 // v4.4.4：在线升级合并 —— 点「管理系统更新」时 api 与前端(webdist)随同一
 // 发布标签一起下载、一起生效；移除前端独立的「检查 / 更新」入口。
+// v4.4.5：「测试APK地址」探测失败时若因地址为 IPv6（字面量或域名解析到 IPv6）
+// 而容器/内网无 IPv6 导致假阴性，明确提示并允许强制保存；测试通过或强制保存
+// 均立即把地址落盘（写 config.yml，不触发编译）。
+// v4.4.6：apk/订阅 给客户端返回服务端地址时严格落实"以请求 host+path 为准、
+// 不以 cfg.ServerUrl 为准"——clientBase 增加请求 path 合法性校验；adminBase 的
+// 兜底回落改为按壳分流（骆驼 /apk/lt 回落 server_url_lt、清和回落 server_url），
+// 避免骆驼壳在请求 host 非法时拿到清和站的下载/数据地址。
+// v4.4.7：修复骆驼壳"登录错误"——登录/频道加密密钥改用**客户端上报的 appname**
+// 派生（不再用 config.yml 的 build.name）：基包 app_name="骆驼" 而后台 build_lt.name
+// ="骆驼电视"时两侧算出两把不同的钥匙，客户端解出乱码报登录失败、服务端无异常。
+// 同时新增**按包名分流**（客户端上报 packagename 优先判壳，无包名上报才回落现有
+// 的"路径判壳 / appname 判壳"）；骆驼壳编译期已把 strings.xml 的 app_name 覆盖为
+// build_lt.name（BuildLuotuoAPK + rewriteClientResources）。
 // 定制分支在主线版本后追加 -custom.N（口径见历史：v4.2.2-custom.2 / v4.3.0-custom.1 / v4.4.2-custom.1）。
-var Version = "v4.4.4-custom.1"
+var Version = "v4.4.8-custom.1"
