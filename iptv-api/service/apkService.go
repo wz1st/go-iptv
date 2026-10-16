@@ -199,12 +199,12 @@ func IsLuotuoAppName(appName string) bool {
 // 放回它正是为了验证"骆驼壳分组在、频道栏空白、不起播"是否由当初删掉它引起。
 // 若确认，隐藏收藏应改用"保留该组、只改展示"的办法，而不是把这一组从下发数据里拿掉。
 func GetChannels(channel dto.DataReqDto, base string, lt bool) string {
-	// 载荷密钥：按壳取。放在最前面算一次，两条返回路径（"该套餐无频道"与正常列表）
-	// 都用同一把 —— 漏改任一条，那种情况下的客户端就永远解不开。
-	appKey := until.GetAesKey()
-	if lt {
-		appKey = until.GetAesKeyLt()
-	}
+	// 载荷密钥：按壳取，且应用名用**上报的 appname**（不再用 config.yml 的 build.name），
+	// 与登录同口径 —— 客户端用 getApplicationLabel() 当密钥输入，服务端用上报同值，
+	// 公式逐字一致（骆驼壳 app_name="骆驼" 也能正确解出频道）。
+	// 放在最前面算一次，两条返回路径（"该套餐无频道"与正常列表）都用同一把 ——
+	// 漏改任一条，那种情况下的客户端就永远解不开。
+	appKey := until.AesKeyForShell(channel.AppName, lt)
 
 	resList := []dto.ChannelListDto{{
 		Name: "我的收藏",

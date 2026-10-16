@@ -25,4 +25,10 @@ package until
 // 不以 cfg.ServerUrl 为准"——clientBase 增加请求 path 合法性校验；adminBase 的
 // 兜底回落改为按壳分流（骆驼 /apk/lt 回落 server_url_lt、清和回落 server_url），
 // 避免骆驼壳在请求 host 非法时拿到清和站的下载/数据地址。
-var Version = "v4.4.6"
+// v4.4.7：修复骆驼壳"登录错误"——登录/频道加密密钥改用**客户端上报的 appname**
+// 派生（不再用 config.yml 的 build.name）：基包 app_name="骆驼" 而后台 build_lt.name
+// ="骆驼电视"时两侧算出两把不同的钥匙，客户端解出乱码报登录失败、服务端无异常。
+// 同时新增**按包名分流**（客户端上报 packagename 优先判壳，无包名上报才回落现有
+// 的"路径判壳 / appname 判壳"）；骆驼壳编译期已把 strings.xml 的 app_name 覆盖为
+// build_lt.name（BuildLuotuoAPK + rewriteClientResources）。
+var Version = "v4.4.8"

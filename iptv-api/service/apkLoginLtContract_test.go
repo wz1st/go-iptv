@@ -21,9 +21,13 @@ import (
 func TestApkLoginLuotuoShellUsesOwnAppUrl(t *testing.T) {
 	src := srcOf(t, "../api/apkApi.go")
 
-	// 前置：分流判据必须在（否则覆盖块根本进不去）
-	if !strings.Contains(src, "if isLuotuoShell(c) {") {
-		t.Fatal("api.ApkLogin 里找不到 isLuotuoShell(c) 分流块 —— 骆驼壳会拿到清和壳的包地址")
+	// 前置：分流判据必须在（否则覆盖块根本进不去）。
+	// 新口径：**包名上报优先**（IsLuotuoPackage(user.Pkg)），无包名上报时回落路径判壳。
+	if !strings.Contains(src, "until.IsLuotuoPackage(user.Pkg)") {
+		t.Fatal("api.ApkLogin 里找不到按包名分流（IsLuotuoPackage）的判据 —— 骆驼壳会拿到清和壳的包地址")
+	}
+	if !strings.Contains(src, "isLuotuoShell(c)") {
+		t.Fatal("api.ApkLogin 里找不到路径判壳兜底（isLuotuoShell）")
 	}
 	for _, want := range []string{
 		"result.AppURL = adminBase(c) + until.ClientLtApkURL(cfg.BuildLt.Name, false)",

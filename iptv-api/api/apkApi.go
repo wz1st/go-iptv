@@ -62,8 +62,13 @@ func ApkLogin(c *gin.Context) {
 	// 两个壳共用这一个入口（`?shell=lt` 分流），所以要把shell 传下去 ——
 	// service层要按它决定回落到哪份配置地址（server_url / server_url_lt）。
 	// 少传这一个参数的后果：骆驼壳在「请求没带基址」时会拿到清和壳的地址。
+	// 分流：**包名上报优先**；无包名上报时才回落现有「路径判壳」逻辑（isLuotuoShell）。
+	lt := until.IsLuotuoPackage(user.Pkg)
+	if user.Pkg == "" {
+		lt = isLuotuoShell(c)
+	}
 	shell := until.ShellQh
-	if isLuotuoShell(c) {
+	if lt {
 		shell = until.ShellLt
 	}
 	result := service.ApkLogin(dbUser, adminBase(c), shell)
@@ -77,7 +82,7 @@ func ApkLogin(c *gin.Context) {
 	// （client/smali 的 SplashActivity->j/->b 只有 sput，没有 sget），
 	// 升级实际走 /apk/lt/getver（g$3.smali 写 g->g/g->f），那条是对的 ——
 	// 所以这是"今天无害、但契约错"的值，仍然修掉，免得壳子哪天读起来就装错包。
-	if isLuotuoShell(c) {
+	if lt {
 		cfg := dao.GetConfig()
 		result.AppVer = cfg.BuildLt.Version
 		result.AppURL = adminBase(c) + until.ClientLtApkURL(cfg.BuildLt.Name, false)
@@ -89,13 +94,12 @@ func ApkLogin(c *gin.Context) {
 
 	resObj, _ := json.Marshal(result)
 
-	// 密钥按壳挑：清和壳与骆驼壳的应用名、包名都不同，密钥必须各算各的
-	// （公式与客户端 smali 的 md5 链逐字一致，见 until.AesKeyOf）。
+	// 密钥按壳挑，且应用名用**上报的 appname**（不再用 config.yml 的 build.name）：
+	// 客户端用 getApplicationLabel() 当密钥输入 E，服务端也用上报的那份 E，公式逐字一致
+	// （见 until.AesKeyForShell）⇒ 骆驼壳 app_name="骆驼" 与后台配置的 "骆驼电视" 不一致时
+	// 也不会再算成两把不同的钥匙 —— 这正是 18098 验证容器骆驼壳"登录错误"的根因。
 	// [5:21] 取的是客户端那条 `F.substring(5, 21)` 的同一切片 —— 两边口径必须一样。
-	key := until.GetAesKey()
-	if isLuotuoShell(c) {
-		key = until.GetAesKeyLt()
-	}
+	key := until.AesKeyForShell(user.AppName, lt)
 	aes := until.NewAes(key[5:21], "AES-128-ECB", "")
 	reAes, _ := aes.Encrypt(string(resObj))
 
@@ -104,9 +108,13 @@ func ApkLogin(c *gin.Context) {
 
 func Getver(c *gin.Context) {
 	// 与 ApkLogin 同一口径：下载地址按请求基址拼，避免站点上 HTTPS 后仍下发 http 明文包地址。
-	// 骆驼壳的版本信息走自己的那套（基底 /app/client/Client_lt.apk、版本号 cfg.BuildLt.Version）
-	// —— 分流判据与登录完全一致（见 isLuotuoShell）。
-	if isLuotuoShell(c) {
+	// 骆驼壳的版本信息走自己的那套（基底 /app/client/Client_lt.apk、版本号 cfg.BuildLt.Version）。
+	// 分流：包名上报优先；无包名上报时回落路径判壳（isLuotuoShell），与登录同口径。
+	lt := isLuotuoShell(c)
+	if c.Query("pkg") != "" {
+		lt = until.IsLuotuoPackage(c.Query("pkg"))
+	}
+	if lt {
 		result := service.GetverLt(adminBase(c))
 		c.JSON(http.StatusOK, result)
 		return
@@ -119,8 +127,13 @@ func GetBg(c *gin.Context) {
 	// 背景图池按壳分（清和壳 /config/images/bj、骆驼壳 /config/images/lt/bj），
 	// 分流判据与登录/getver 完全一致（见 isLuotuoShell）—— 骆驼壳的 SplashActivity
 	// 会拿这个地址下载启动背景并缓存成 filesDir/ez_bg.png。
+	// 分流：包名上报优先；无包名上报时回落路径判壳（isLuotuoShell），与登录/getver 同口径。
+	lt := isLuotuoShell(c)
+	if c.Query("pkg") != "" {
+		lt = until.IsLuotuoPackage(c.Query("pkg"))
+	}
 	shell := until.ShellQh
-	if isLuotuoShell(c) {
+	if lt {
 		shell = until.ShellLt
 	}
 	imgName := service.GetBg(shell)
@@ -154,12 +167,14 @@ func GetChannels(c *gin.Context) {
 	// base 只影响 purl（中转地址）。取不到合法 Host 时传空串，
 	// service 那边会退化成下发源地址，而不是下发一条空 URL。
 	base, _ := clientBase(c)
-	// 载荷密钥按壳选。判据**优先看请求体里的 appname** —— 骆驼壳请求的是登录
-	// 下发给它的 dataurl，而现役/历史包都可能落在 `/apk/channels`（不带 /lt），
-	// 光看路径分不出调用方；appname 就是它自己的应用显示名（smali 里
-	// `"appname"` ← getApplicationLabel()），与服务端 cfg.BuildLt.Name 同源。
-	// 没带 appname 时回落路由判据（/apk/lt/ 前缀或 ?shell=lt）。
+	// 载荷密钥按壳选。分流：**包名上报优先**；无包名上报时回落现有判据
+	// （appname + 路径）。appname 是它自己的应用显示名（smali `"appname"` ←
+	// getApplicationLabel()），骆驼壳请求的是登录下发给它的 dataurl，而现役/历史包
+	// 都可能落在 `/apk/channels`（不带 /lt），光看路径分不出调用方。
 	lt := service.IsLuotuoAppName(channel.AppName) || isLuotuoShell(c)
+	if channel.Pkg != "" {
+		lt = until.IsLuotuoPackage(channel.Pkg)
+	}
 	result := service.GetChannels(channel, base, lt)
 
 	c.String(http.StatusOK, result)

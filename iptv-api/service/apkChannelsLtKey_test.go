@@ -173,8 +173,7 @@ func TestGetChannelsSelectsKeyByShell(t *testing.T) {
 
 	for _, want := range []string{
 		"func GetChannels(channel dto.DataReqDto, base string, lt bool) string",
-		"appKey := until.GetAesKey()",
-		"appKey = until.GetAesKeyLt()",
+		"appKey := until.AesKeyForShell(channel.AppName, lt)",
 		"func encrypt(str string, randkey string, appKey string) string",
 		"hashedKey := until.Md5(appKey + randkey)",
 	} {
