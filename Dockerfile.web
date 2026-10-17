@@ -112,7 +112,7 @@ COPY client/Client.apk client/Version_client client/Client_lt.apk client/Version
 
 # 配置与文档：ChangeLog.md 每次发布都改，所以这一组也在尾部。
 # （与基包分开的单独一层：只改 ChangeLog 时不必重传基包那几十 MB。）
-COPY config.yml README.md dictionary.txt alias.json ChangeLog.md keystore.p12 /app/
+COPY config.yml README.md dictionary.txt alias.json ChangeLog.md Guide.md keystore.p12 /app/
 
 # 二进制产物。`/app/.image/{iptv,engine}` 是**启动器自愈用的镜像层副本**
 # （iptv-start/until/selfheal.go 的 ImageBackupDir）：/app 是容器可写层，

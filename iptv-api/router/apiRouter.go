@@ -173,6 +173,10 @@ var adminRoutes = []apiRoute{
 	// --- 关于 ---
 	{"about/data", api.AboutData},
 
+	// --- 使用说明（首次进入的引导页）---
+	{"guide/data", api.GuideData},
+	{"guide/ack", api.GuideAck},
+
 	// --- SSL 证书（系统菜单）---
 	// 证书/私钥固定落在 /config/cert（持久卷），开关与端口落在 config.yml 的 ssl 段；
 	// 保存时渲染 nginx 片段并 reload（见 until/sslUntil.go）。
