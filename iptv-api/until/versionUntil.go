@@ -31,4 +31,9 @@ package until
 // 同时新增**按包名分流**（客户端上报 packagename 优先判壳，无包名上报才回落现有
 // 的"路径判壳 / appname 判壳"）；骆驼壳编译期已把 strings.xml 的 app_name 覆盖为
 // build_lt.name（BuildLuotuoAPK + rewriteClientResources）。
-var Version = "v4.4.8"
+// v4.5.0：「反代友好」—— 前端反代（Lucky / NPM / Caddy）在公网做 HTTPS 终结、
+// 以明文 HTTP 转发给本机 :80 时，nginx 现在**透传**上游下发的 X-Forwarded-Proto，
+// 后端据此返回 https:// 地址（APK 取流/下载不再拿到 http 明文地址而失败）；
+// 「80 强制跳转 HTTPS」在请求已带 X-Forwarded-Proto: https 时**不再跳转**，
+// 避免与反代自身的跳转形成环路。站点的直连与"自己开 HTTPS"两种老场景行为完全不变。
+var Version = "v4.5.0"

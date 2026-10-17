@@ -10,7 +10,11 @@ proxy_set_header X-Real-IP         $remote_addr;
 # 后端 router.go 的 RemoteIPHeaders 依次认
 proxy_set_header X-Original-Forwarded-For $http_x_forwarded_for;
 proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-proxy_set_header X-Forwarded-Proto $scheme;
+# 透传上游反代的协议（见 nginx.conf 的 map $iptv_forwarded_proto）：
+# 反代已做 HTTPS 终结时下发的 X-Forwarded-Proto 优先，否则回落本层 $scheme。
+# 这是「反代友好」的关键 —— 否则本层 :80 收到明文转发会告诉后端 proto=http，
+# 后端下发的 http:// 地址在公网 https 上下文里会被混合内容策略拦掉、APK 取流失败。
+proxy_set_header X-Forwarded-Proto $iptv_forwarded_proto;
 # 同样带端口，见上面对 $host 的说明。
 proxy_set_header X-Forwarded-Host  $iptv_upstream_host;
 

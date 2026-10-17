@@ -202,8 +202,13 @@ func TestRenderRedirect80HasLoopbackExemption(t *testing.T) {
 	// 环回豁免：容器的 HEALTHCHECK 是 `wget -qO- http://127.0.0.1/version`，
 	// 少了这条判断，开了强制跳转后容器会一直 unhealthy
 	// —— 「容器状态」和「HTTPS 通不通」是两件事，不该互相牵连。
-	if !strings.Contains(on, `if ($remote_addr != "127.0.0.1")`) {
+	if !strings.Contains(on, `$remote_addr != "127.0.0.1"`) {
 		t.Errorf("缺少环回豁免，开了强制跳转会拖垮 HEALTHCHECK\n%s", on)
+	}
+	// 反代豁免：前端反代已做 HTTPS 终结、下发 X-Forwarded-Proto: https 时，
+	// 不该再对本层收到的明文转发请求做 301 跳转（否则与反代自身跳转形成环路）。
+	if !strings.Contains(on, `$http_x_forwarded_proto != "https"`) {
+		t.Errorf("缺少反代豁免，前端反代后会与 301 形成环路\n%s", on)
 	}
 
 	if p := RenderRedirect80(8443, true); !strings.Contains(p, "return 301 https://$host:8443$request_uri;") {
@@ -777,8 +782,8 @@ func TestRedirectIsSubordinateToHTTPS(t *testing.T) {
 // 免得后来者"顺手"把它删掉。
 func TestRedirectSnippetKeepsLoopbackGuard(t *testing.T) {
 	src := sslSrcOf(t, "sslUntil.go")
-	if !strings.Contains(src, `"if ($remote_addr != \"127.0.0.1\") {\n"`) {
-		t.Error("RenderRedirect80 里的环回豁免行不见了 —— 删掉它会让开了强制跳转的容器一直 unhealthy")
+	if !strings.Contains(src, `"if ($remote_addr != \"127.0.0.1\" && $http_x_forwarded_proto != \"https\") {\n"`) {
+		t.Error("RenderRedirect80 里的环回豁免 / 反代豁免行不见了 —— 删掉环回豁免会让开了强制跳转的容器一直 unhealthy，删掉反代豁免会与前端反代形成跳转环路")
 	}
 	if !strings.Contains(src, "HEALTHCHECK") {
 		t.Error("环回豁免的注释里必须写明 HEALTHCHECK 这个理由")

@@ -344,6 +344,12 @@ func RenderHTTPSConf(port int, http2 bool) string {
 // 环回地址（127.0.0.1）**不跳转**：容器的 HEALTHCHECK 是
 // `wget -qO- http://127.0.0.1/version`，全量跳转会让健康检查拿到 301 + 自签证书
 // 而判定 unhealthy —— 容器状态变红与"HTTPS 是否正常"其实是两件事，不该互相牵连。
+//
+// 反代豁免：$http_x_forwarded_proto == "https" 时不跳转。前端反代（Lucky / NPM）
+// 在公网做 HTTPS 终结、以明文 HTTP 转发给本机 :80 时，本层收到的就是**明文**请求；
+// 若仍对它做 301 跳 https，会与反代自己的跳转形成环路，或把客户端从反代前面
+// 拽到直连 https —— 而那条路径往往根本不通。既然上游已经声明是 https，就交给
+// 上游去管，本层不再二次跳转。
 func RenderRedirect80(port int, on bool) string {
 	if port < 1 || port > 65535 {
 		port = DefaultHTTPSPort
@@ -357,8 +363,8 @@ func RenderRedirect80(port int, on bool) string {
 		target = fmt.Sprintf("https://$host:%d", port)
 	}
 	return "# 由后台「SSL 证书」页生成：本文件有内容 = 已开启「80 强制跳转 HTTPS」。\n" +
-		"# 环回地址放行，理由见 until/sslUntil.go 的 RenderRedirect80 注释。\n" +
-		"if ($remote_addr != \"127.0.0.1\") {\n" +
+		"# 环回地址放行、反代上游已声明 https 时放行，理由见 until/sslUntil.go 的 RenderRedirect80 注释。\n" +
+		"if ($remote_addr != \"127.0.0.1\" && $http_x_forwarded_proto != \"https\") {\n" +
 		"    return 301 " + target + "$request_uri;\n" +
 		"}\n"
 }
