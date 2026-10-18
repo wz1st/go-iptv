@@ -58,40 +58,16 @@ docker run -d --privileged --name iptv_server -p <port>:80 -v iptv:/config v1st2
 ```
 
 ### 方式三：自己构建镜像
-本仓有两个 Dockerfile，**都不编译 Go 二进制和前端**，区别只有「产物从哪来」：
-
-| Dockerfile | 产物来源 | 适用场景 |
-|---|---|---|
-| `Dockerfile` | 从 GitHub Release 下载目标架构的最新版产物 | 普通用户：`git clone` 后直接构建，不需要 Go / Node 工具链，也不需要本仓里有编译产物 |
-| `Dockerfile.web` | 用构建上下文里已有的产物组装（`iptv_all/` `engine_all/` `start_all/` `webdist/`） | CI 与二次开发：产物先由 GitHub Actions 或本机编译好，再打进镜像 |
-
 ```
-# 在线下载版（自动探测各仓最新版本）
 git clone https://github.com/wz1st/go-iptv.git
 cd go-iptv
 docker build -f Dockerfile -t iptv:latest .
 docker run -d --name iptv_server -p <port>:80 -v iptv:/config iptv:latest
-
-# 本地产物组装版（需先把产物放进 iptv_all/ engine_all/ start_all/ webdist/）
-docker build -f Dockerfile.web -t iptv:latest .
-```
-
-`Dockerfile`（在线下载版）的可选构建参数：
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `API_VERSION` | `latest` | 管理系统版本，`latest` = 自动探测 `wz1st/go-iptv` 最新的 `vX.Y.Z` |
-| `ENGINE_VERSION` | `latest` | 引擎版本，`latest` = 自动探测 `wz1st/go-iptv` 最新的 `engine-vX.Y.Z`（引擎版本号独立成序列） |
-| `FRONT_VERSION` | `same` | 前端产物版本，`same` = 跟随 `API_VERSION` |
-| `START_VERSION` | `same` | 启动器版本，`same` = 跟随 `API_VERSION` |
-| `APK_MIRROR` | 清华源 | Alpine 包源 |
-
-```
-docker build -f Dockerfile --build-arg API_VERSION=latest --build-arg ENGINE_VERSION=latest -t iptv:latest .
 ```
 
 ## 使用
 容器跑起来后访问`http://<ip>:<port>`即可，根据提示安装系统，然后登录添加源->修改套餐->下载安装APK->授权用户即可使用
+[使用说明](./Guide.md)
 
 ## 打赏
 >如果觉得好用，请打赏支持一下
