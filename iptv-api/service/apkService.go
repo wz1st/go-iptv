@@ -18,6 +18,24 @@ import (
 	"time"
 )
 
+// ClientApkUpSize 供 getver 使用的包大小。
+//
+// **不能直接返回 until.GetFileSize**：那个函数的失败值 "0 MB" 是
+// SiteIndexData / spaSiteApi 判定「APK 是否存在」的哨兵（`== "0 MB"` / `!= "0 MB"`，
+// 见 api/spaSiteApi.go:84,141），把它改掉会连带改坏面板的在线包判断。
+//
+// 线上包还没编译出来时（新建站点、刚清过 /config/app、或还没跑过一次 publish），
+// 客户端会在更新弹窗里看到「安装包大小：0 MB」—— 看着像坏值。
+// 这里在"包不存在"时回落到 NoApkVersion（0.0.0.000）：客户端拿它和服务端
+// 版本做字典序比较时必然判「已是最新」，既不会提示一个假的新版本，
+// 也不会显示 0 MB 这种半成品文案。
+func ClientApkUpSize(path string) string {
+	if !until.Exists(path) {
+		return until.NoApkVersion
+	}
+	return until.GetFileSize(path)
+}
+
 // Getver 取客户端版本信息。base 是本次请求的对外基址（scheme://host[:port]），
 // 下载地址由它拼出 —— 空串时才回落配置里的 ServerUrl（见 api.Getver 的注释）。
 func Getver(base string) dto.GetverRes {
@@ -47,7 +65,7 @@ func Getver(base string) dto.GetverRes {
 	// 原来写的是相对路径 `./app/...`，运行目录是 `/app` 而包在持久卷 `/config/app/`，
 	// os.Stat 必然失败 ⇒ GetFileSize 恒返回 "0 MB"，客户端更新弹窗里的包大小一直是 0。
 	// 这正是 SiteIndexData 用来判断"APK 是否存在"的同一个判据（!= "0 MB"）。
-	res.UpSize = until.GetFileSize(until.ClientApkPath(cfg.Build.Name, false))
+	res.UpSize = ClientApkUpSize(until.ClientApkPath(cfg.Build.Name, false))
 	return res
 }
 
@@ -70,7 +88,7 @@ func GetverLt(base string) dto.GetverRes {
 	res.UpForce = cfg.App.ForceUpdate
 	res.UpText = until.FixedUpdateText
 	res.AppURL = base + until.ClientLtApkURL(cfg.BuildLt.Name, false)
-	res.UpSize = until.GetFileSize(until.ClientLtApkPath(cfg.BuildLt.Name, false))
+	res.UpSize = ClientApkUpSize(until.ClientLtApkPath(cfg.BuildLt.Name, false))
 	return res
 }
 

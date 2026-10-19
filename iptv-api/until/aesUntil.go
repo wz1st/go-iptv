@@ -44,6 +44,14 @@ const FixedPackageLt = "xyz.qingh.lutuo"
 // FixedUpdateText 是客户端升级弹窗的固定文案，原为 config.yml 的 app.update.text。
 const FixedUpdateText = "update"
 
+// NoApkVersion 是「线上还没有可升级的 apk 包」时对外的版本号占位。
+//
+// 客户端把 getver 的 appver 与本机 versionName 做**纯字典序**比较
+// （UpdateUtil.a(String,String) 直接 String.compareTo），所以这个值必须
+// **恒小于任何一个真实版本**：真实版本形如 0.32.1.000，而 "0.0.0.000"
+// 逐段都更小 ⇒ 客户端一律判「已是最新」，不会弹一个指向空包的更新框。
+const NoApkVersion = "0.0.0.000"
+
 type Aes struct {
 	Method    string
 	SecretKey []byte
