@@ -45,4 +45,9 @@ package until
 // 引导页卡片不再内滚（去掉 max-height/overflow，高度随内容），确认按钮移入卡片内
 // 最后面且已确认后再进不显示；「读至页尾」改判页面级滚动容器（SidebarInset）是否
 // 滚到底；授权弹窗改为主页才弹（保留每次进入系统仅弹一次）；ack 后进主页默认展开侧边栏。
-var Version = "v4.6.1"
+// v4.6.2：客户端「强制更新」开关 —— 后台「下发设置」页新增开关（api App.ForceUpdate），
+// Getver/GetverLt 下发 forceupdate（与骆驼壳 smali g$3 的 optInt("forceupdate",0) 逐字对齐），
+// 开启后客户端发现新版本弹不可取消的「立即更新」对话框（UpdateUtil$2 的 AlertDialog
+// setCancelable(false)）。纯后端配置项，不改任何客户端二进制即生效；骆驼壳基底同步推进
+// 到 luotuo-v0.32.1（P2P 引擎移除 / 天气显示删除 / 启动非阻塞静默化 / 错误提示区分）。
+var Version = "v4.6.2"
