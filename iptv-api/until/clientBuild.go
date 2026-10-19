@@ -292,9 +292,12 @@ func rewriteClientResources(workDir string, v ClientBuildValues) error {
 //
 // ## 为什么替换后还要再扫一遍
 //
-// 替换只认「像地址的串」，一旦基底换了地址形态而这里没跟上，就会再次退化成
-// 「命中 0 或命中错串」。所以替换后再全量扫一遍：还有形如地址却没被换掉的
-// const-string 就直接报错，把「编出一个指向别处的包」挡在编译阶段。
+// 替换正则认 `const-string` 与 `const-string/jumbo` 两种宽度（长地址在 dex 里
+// 常被解码成 jumbo）。但基底地址仍可能以本函数没覆盖到的写法出现（例如换了
+// 路径规则、或 apktool 用了别的解码形态），一旦这里没跟上，就会退化成
+// 「命中 0 或命中错串」。所以替换后再用 findUnpatchedHostLiterals 全量扫一遍
+// （它才是超集）：还有形如地址却没被换掉、且不以新 host 打头的 const-string 就
+// 直接报错，把「编出一个指向别处的包」挡在编译阶段。
 func patchClientHostInSmali(workDir, serverURL string) error {
 	host := strings.TrimRight(strings.TrimSpace(serverURL), "/")
 	if host == "" {
@@ -304,7 +307,13 @@ func patchClientHostInSmali(workDir, serverURL string) error {
 	repl := strings.ReplaceAll(host, "$", "$$")
 	// ${1} 是 const-string 的寄存器与引号部分；地址本体整条换成 host，
 	// 后面跟的 /getepg、/weather 之类后缀原样保留。
-	re := regexp.MustCompile(`(const-string\s+[vp]\d+,\s*")https?://[^\s"]*?/(?:iptv|apk/lt)`)
+	//
+	// ★ 必须同时认 `const-string` 与 `const-string/jumbo`：长地址在 dex 里常被
+	// 解码成 jumbo 指令（串索引越过 0xFFFF 时 apktool 即吐 jumbo），若只认
+	// const-string 就会一个真地址都匹配不到、命中数 0 ⇒ 编译失败。反向断言那
+	// 条正则（findUnpatchedHostLiterals）本来就认 jumbo，这里也必须跟上，否则
+	// 替换面比扫描面窄，正好漏掉 jumbo 形态的真地址。
+	re := regexp.MustCompile(`(const-string(?:/jumbo)?\s+[vp]\d+,\s*")https?://[^\s"]*?/(?:iptv|apk/lt)`)
 	smaliDir := filepath.Join(workDir, "smali")
 	hits := 0
 	err := filepath.WalkDir(smaliDir, func(path string, d os.DirEntry, err error) error {

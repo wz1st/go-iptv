@@ -314,24 +314,28 @@ func TestPatchClientHostInSmali_RewritesApkLtLiterals(t *testing.T) {
 	}
 }
 
-// 替换完还有「是站点地址、却不是新 host 打头」的 const-string ⇒ 必须报错。
-//
-// 命中的串换了、漏网的串还在，比「一个都没换」更危险：前者看起来成功。
-// 用 const-string/jumbo 构造：替换用的正则不认这个指令宽度，扫描用的认，
-// 于是它就成了「漏网」—— 正是这道断言要拦的那类半新半旧。
-func TestPatchClientHostInSmali_JumboVariantIsFatal(t *testing.T) {
+// 现行基底在 0.32.1 起把地址解码成 const-string/jumbo（串索引越过 0xFFFF）。
+// 替换正则必须同时认 const-string 与 const-string/jumbo，否则一个真地址都
+// 匹配不到、命中数 0 ⇒ 编译失败（服务端报「找不到服务端地址字面量」）。
+func TestPatchClientHostInSmali_JumboVariantIsRewritten(t *testing.T) {
 	work := t.TempDir()
 	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
 		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n")
 	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity.smali",
 		"    const-string/jumbo v0, \"https://iptv.qingh.xyz/apk/lt/getepg\"\n")
 
-	err := patchClientHostInSmali(work, "http://10.10.220.162:18098/apk/lt")
-	if err == nil {
-		t.Fatal("有漏网的地址字面量时必须报错，不能编出半新半旧的包")
+	if err := patchClientHostInSmali(work, "http://10.10.220.162:18098/apk/lt"); err != nil {
+		t.Fatalf("jumbo 地址应当被替换: %v", err)
 	}
-	if !strings.Contains(err.Error(), "iptv.qingh.xyz") {
-		t.Errorf("报错应点名残留字面量，实际: %v", err)
+	jumbo, err := os.ReadFile(filepath.Join(work, "smali", "com", "eztv", "powerful", "PlayerActivity.smali"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(jumbo), `"http://10.10.220.162:18098/apk/lt/getepg"`) {
+		t.Errorf("jumbo 地址未被替换:\n%s", string(jumbo))
+	}
+	if strings.Contains(string(jumbo), "iptv.qingh.xyz") {
+		t.Errorf("旧站点地址残留:\n%s", string(jumbo))
 	}
 }
 
