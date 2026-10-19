@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"iptv-api/dto"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,18 +104,6 @@ type ClientBuildValues struct {
 	Shell string
 }
 
-// apktoolLowArgs 是低资源环境下的 apktool 参数。
-// 与旧 build.go 逐字一致：编译基底比编整棵树轻，但 dex 合并阶段同样吃内存。
-var apktoolLowArgs = []string{
-	"-JXmx128M",
-	"-JXX:+UseParallelGC",
-	"-JXX:+UseStringDeduplication",
-	"-JXX:ParallelGCThreads=2",
-	"-JDfile.encoding=utf-8",
-	"-JDjdk.util.zip.disableZip64ExtraFieldValidation=true",
-	"-JDjdk.nio.zipfs.allowDotZipEntry=true",
-}
-
 // BuildClientApk 从基底 APK 编译出一份新 APK。
 //
 // 流程：解包基底 → 改三个资源 + 图标/背景 → apktool 重编 → 对齐签名。
@@ -124,6 +113,16 @@ var apktoolLowArgs = []string{
 func BuildClientApk(baseApk, outApk, workDir string, v ClientBuildValues) error {
 	if err := validateClientValues(v); err != nil {
 		return err
+	}
+
+	// 编译前先算资源预算（可用内存 / CPU 占用率 / 核数）。
+	// apktool 与 apksigner 都是 JVM，不设上限时堆上限按物理内存的 1/4 算 ——
+	// 小内存机器上这一步会把系统可用内存抽干，连本服务一起被 OOM Killer 干掉，
+	// 表现为「点了编译按钮、整个后台没响应」。算法见 buildBudget.go。
+	budget := PlanBuildBudget(IsLowResource() || os.Getenv("LOWOS") == "true")
+	log.Printf("%s", budget)
+	if !budget.Ok() {
+		return fmt.Errorf("系统内存不足，已终止编译：%s", budget.Reason)
 	}
 	if err := os.MkdirAll(filepath.Dir(outApk), 0755); err != nil {
 		return fmt.Errorf("apk 输出目录创建失败: %v", err)
@@ -159,15 +158,11 @@ func BuildClientApk(baseApk, outApk, workDir string, v ClientBuildValues) error 
 		return err
 	}
 
-	args := []string{"b", workDir, "-o", outApk}
-	if IsLowResource() || os.Getenv("LOWOS") == "true" {
-		args = append(apktoolLowArgs, args...)
-	}
-	if out, err := runTool("apktool", args...); err != nil {
+	if out, err := runToolEnv(budget.JavaEnv(), "apktool", "b", workDir, "-o", outApk); err != nil {
 		return fmt.Errorf("编译 APK 失败: %v\n%s", err, out)
 	}
 
-	if err := signClientApk(outApk, v.Shell); err != nil {
+	if err := signClientApk(outApk, v.Shell, budget); err != nil {
 		return err
 	}
 	return nil
@@ -563,7 +558,7 @@ func (v ClientBuildValues) versionName() string {
 //
 // 现在统一走该壳的固定 keystore（持久卷 /config/client/keystore_<shell>.p12），
 // 缺则在安装/首次编译时固定一份，之后所有编译签名一致 ⇒ 覆盖安装成立。
-func signClientApk(apkPath, shell string) error {
+func signClientApk(apkPath, shell string, budget BuildBudget) error {
 	ks, alias, err := EnsureClientKeystore(shell)
 	if err != nil {
 		return err
@@ -604,6 +599,12 @@ func signClientApk(apkPath, shell string) error {
 		"--v2-signing-enabled", "true",
 		"--v3-signing-enabled", "true",
 		apkPath)
+	// apksigner 同样是 JVM，堆上限必须跟着预算走 —— 只限制 apktool 的话，
+	// 签名阶段照样能把系统内存抽干，前面留的 256M 余量等于没留。
+	// 走 JAVA_TOOL_OPTIONS（HotSpot 直接读），不依赖 apksigner 脚本认哪个变量。
+	if env := budget.JavaEnv(); env != nil {
+		sign.Env = append(os.Environ(), env...)
+	}
 	if out, err := sign.CombinedOutput(); err != nil {
 		return fmt.Errorf("签名失败(%s): %v\n%s", apksignerBin(), err, out)
 	}
@@ -637,7 +638,16 @@ func zipalignBin() string {
 // apktool 的报错全在 stdout/stderr，丢���输出就只剩一个 exit code，
 // 排查时等于两眼一抹黑。
 func runTool(name string, args ...string) (string, error) {
+	return runToolEnv(nil, name, args...)
+}
+
+// runToolEnv 与 runTool 相同，但额外注入环境变量 —— 用来给 JVM 进程
+// 传堆上限（JAVA_TOOL_OPTIONS 是 HotSpot 自己读的，不依赖被调程序怎么转发参数）。
+func runToolEnv(env []string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

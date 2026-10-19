@@ -50,4 +50,14 @@ package until
 // 开启后客户端发现新版本弹不可取消的「立即更新」对话框（UpdateUtil$2 的 AlertDialog
 // setCancelable(false)）。纯后端配置项，不改任何客户端二进制即生效；骆驼壳基底同步推进
 // 到 luotuo-v0.32.1（P2P 引擎移除 / 天气显示删除 / 启动非阻塞静默化 / 错误提示区分）。
-var Version = "v4.6.2"
+// v4.7.1：编译 apk 前按系统余量动态定内存上限（until/buildBudget.go）——
+// apktool 与 apksigner 都是 JVM，不设限时堆上限按物理内存 1/4 算，小内存机器上
+// 一次编译就能把系统可用内存抽干、连本服务一起被 OOM Killer 干掉，表现为
+// 「点了编译按钮、整个后台没响应」。现在编译前采样可用内存 + CPU 占用率：
+// 可用 ≥1G 不限制；<1G 则堆上限 = 可用 - 256M（给系统留保底），CPU ≥85% 再多留
+// 25% 余量，GC 线程取 核数-1（给系统留一核）；扣完不足 128M 直接拒绝编译并说清原因。
+// 附带：getver 响应删除只写不读的 appsets（客户端骆驼壳同步删 getInt，服务端+客户端成对）。
+// 本版同时把 api 构建/校验脚本对齐到 Go 1.25（与 CI GO_VERSION=1.25、start/engine 一致），
+// go.mod 随之提到 go 1.25.0 以承载 gopsutil/cpu 的传递依赖 tklauser/go-sysconf v0.4.0。
+// 前两段变化 ⇒ 需换镜像。
+var Version = "v4.7.1"
