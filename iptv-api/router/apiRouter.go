@@ -124,6 +124,7 @@ var adminRoutes = []apiRoute{
 	{"client/decoder", api.ClientDecoder},
 	{"client/buffTimeout", api.ClientBuffTimeout},
 	{"client/needAuthor", api.ClientNeedAuthor},
+	{"client/forceUpdate", api.ClientForceUpdate},
 	{"client/appInfo", api.ClientAppInfo},
 	// 「保存并测试」拆两步：这一步只测可达性，不落盘、不触发编译。
 	{"client/testUrl", api.ClientTestUrl},

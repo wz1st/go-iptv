@@ -56,6 +56,9 @@ type GetverRes struct {
 	UpSize string `json:"appsize"`
 	UpSets int64  `json:"appsets"`
 	UpText string `json:"apptext"`
+	// UpForce 是「强制更新」开关，json 键 `forceupdate`，与客户端 getver 解析
+	// （smali g$3 的 optInt("forceupdate", 0)）逐字对齐，错一个字母就永远读成 0。
+	UpForce int64 `json:"forceupdate"`
 }
 
 type ApkUser struct {

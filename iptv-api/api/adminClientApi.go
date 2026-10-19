@@ -60,6 +60,16 @@ func ClientNeedAuthor(c *gin.Context) {
 	reply(c, service.SetNeedAuthor(req))
 }
 
+// ClientForceUpdate 设置「强制更新」开关。
+// POST /api/client/forceUpdate  {"forceUpdate":1}
+func ClientForceUpdate(c *gin.Context) {
+	var req dto.ClientForceUpdateReq
+	if !bindJSON(c, &req) {
+		return
+	}
+	reply(c, service.SetForceUpdate(req))
+}
+
 // ClientAppInfo 保存 APK 构建参数并触发编译。
 func ClientAppInfo(c *gin.Context) {
 	var req dto.ClientAppInfoReq

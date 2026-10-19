@@ -27,6 +27,10 @@ type App struct {
 	NeedAuthor  int64 `mapstructure:"needauthor" json:"needAuthor" yaml:"needauthor"`
 	BuffTimeout int64 `mapstructure:"buff_time_out" json:"buffTimeout" yaml:"buff_time_out"`
 	Decoder     int64 `mapstructure:"decoder" json:"decoder" yaml:"decoder"`
+	// ForceUpdate 是「强制更新」开关：开启后 APK 发现新版本会弹出**不可取消**的更新框，
+	// 不点更新进不去主界面。yaml 键 `forceupdate`、json 键同名 —— 客户端 getver 解析
+	// 只读 `forceupdate`（见 smali g$3）。两个壳共用同一份配置（与 NeedAuthor 同构）。
+	ForceUpdate int64 `mapstructure:"forceupdate" json:"forceUpdate" yaml:"forceupdate"`
 	// TrialDays   int64 `mapstructure:"trialdays" json:"trialdays" yaml:"trialdays"`
 	Update AppUpdate `mapstructure:"update" json:"update" yaml:"update"`
 }
