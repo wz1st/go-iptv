@@ -57,7 +57,6 @@ func Getver(base string) dto.GetverRes {
 	// 「新基底 + 旧编译号」这样一个并不存在的版本。口径与面板
 	// （ClientApkInfo 的 curVersion）必须逐字一致，否则同一个包两处显示不同版本。
 	res.AppVer = until.FormatClientVersion(until.ClientPublishedBase(), cfg.Build.Version)
-	res.UpSets = cfg.App.Update.Set
 	res.UpForce = cfg.App.ForceUpdate
 	res.UpText = until.FixedUpdateText
 	res.AppURL = base + until.ClientApkURL(cfg.Build.Name, false)
@@ -84,7 +83,6 @@ func GetverLt(base string) dto.GetverRes {
 	base = publicBase(base, until.LuotuoServerURL(cfg))
 
 	res.AppVer = until.FormatClientVersion(until.ClientPublishedLtBase(), cfg.BuildLt.Version)
-	res.UpSets = cfg.App.Update.Set
 	res.UpForce = cfg.App.ForceUpdate
 	res.UpText = until.FixedUpdateText
 	res.AppURL = base + until.ClientLtApkURL(cfg.BuildLt.Name, false)
