@@ -29,6 +29,12 @@ COPY mytv /app/mytv
 
 # 换源 → 装包 → 拉 build-tools（走代理）→ 清理。
 # 顺序有讲究：换源必须**在 apk add 之前**；代理只对 curl 那一步生效。
+#
+# ★换源与下面那句自检都不能省：docker 构建网络到不了 dl-cdn（宿主机 curl 200、
+# 构建容器内 Permission denied），apk add 会报 "no such package" 但 **buildkit
+# 仍当该层成功**，产出缺 nginx/openjdk/ffmpeg 的残镜像（315MB vs 正常 693MB），
+# 容器一起来就死。此前没暴露只因该层命中过 CACHED。
+RUN sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#https://mirrors.tuna.tsinghua.edu.cn/alpine#g" /etc/apk/repositories
 RUN apk add --no-cache \
         openjdk17 \
         bash \
@@ -41,6 +47,8 @@ RUN apk add --no-cache \
         libc6-compat \
         libstdc++ \
         tzdata \
+ && apk info -e nginx openjdk17 ffmpeg > /dev/null \
+ && echo "本层关键包自检通过（nginx/openjdk17/ffmpeg 均已安装）" \
  && cp /usr/share/zoneinfo/${TZ} /etc/localtime \
  && echo ${TZ} > /etc/timezone \
  && mkdir -p /var/log/nginx /var/lib/nginx/tmp /run \

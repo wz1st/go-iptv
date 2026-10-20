@@ -6,6 +6,7 @@ import (
 
 	"iptv-api/dao"
 	"iptv-api/dto"
+	"iptv-api/until"
 )
 
 // 中转取流走代理的授权口径。
@@ -192,5 +193,55 @@ func TestProxyScopeRelayGates(t *testing.T) {
 	}
 	if got := dao.GetConfig().OutProxy.UseRelay; got != 1 {
 		t.Errorf("中转开关没落盘: %d", got)
+	}
+}
+
+// 强制保存的资格：只有「代理能连上但访问不了境外」这一种失败允许。
+//
+// dial（连不上代理）不给强存口子 —— 那种配置存下去必然是坏的，
+// 运行时的表现是各类抓取静默失败，比压根没配代理更难排查。
+func TestCanForceSaveOnlyForOverseas(t *testing.T) {
+	if canForceSave(until.ProxyTestResult{OK: true}) {
+		t.Error("通过的结果不该有强制保存")
+	}
+	if canForceSave(until.ProxyTestResult{FailType: until.ProxyFailDial}) {
+		t.Error("连不上代理不该允许强制保存")
+	}
+	if !canForceSave(until.ProxyTestResult{FailType: until.ProxyFailOverseas}) {
+		t.Error("能连但出不去境外应当允许强制保存")
+	}
+}
+
+// 无代理保存：不受凭据影响，也不测试，直接落盘并关掉四个作用范围。
+func TestProxySaveNoneSkipsTest(t *testing.T) {
+	withLic(t, dto.Lic{Type: 4})
+	withCfg(t, dto.OutProxy{Type: "socks5", Host: "9.9.9.9", Port: 1080, UseUp: 1})
+
+	req := dto.OutProxySaveDto{OutProxy: dto.OutProxy{Type: "", Host: "9.9.9.9", Port: 1080}}
+	r := ProxySave(req)
+	if r.Code != 1 {
+		t.Fatalf("无代理保存应成功: %+v", r)
+	}
+	got := dao.GetConfig().OutProxy
+	if got.Type != until.ProxyTypeNone {
+		t.Errorf("协议没落成无代理: %q", got.Type)
+	}
+	if got.UseUp != 0 {
+		t.Errorf("无代理时作用范围应全关: %+v", got)
+	}
+	// 地址与端口保留（下次启用不用重填）
+	if got.Host != "9.9.9.9" || got.Port != 1080 {
+		t.Errorf("无代理不该清掉地址与端口: %+v", got)
+	}
+}
+
+// 凭据与配置对不上时，凭据必须被忽略（不能拿一张旧凭据免测新配置）。
+func TestVerifyProxyTestTokenRejectsOtherConfig(t *testing.T) {
+	fpA := proxyFingerprint(dto.OutProxy{Type: "socks5", Host: "1.1.1.1", Port: 1080})
+	fpB := proxyFingerprint(dto.OutProxy{Type: "socks5", Host: "2.2.2.2", Port: 1080})
+	tok := issueProxyTestToken(fpA, proxyTestVerdict{OK: true})
+
+	if _, ok := verifyProxyTestToken(tok, fpB); ok {
+		t.Error("凭据属于另一份配置时必须作废")
 	}
 }

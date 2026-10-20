@@ -95,15 +95,30 @@ func mergeProxyConn(cur, in dto.OutProxy) dto.OutProxy {
 }
 
 // ProxyTest 只测不存：连代理 + 访问 GitHub/Google，失败时按类型回话。
+//
+// 回话里带 canForce：告诉前端「这次失败要不要给用户一个强制保存的出口」。
+// 判据只有一条 —— 失败类型是 overseas（代理能连但出不去境外）。
+// dial（连不上代理）不允许强存，那种配置存下去必然是坏的。
+//
+// 测完会签一张凭据（testToken）随回话带回：它记着"这份配置刚测过、
+// 结论是什么"。用户接着点保存时带着它来，服务端核对配置没被改动过
+// 就免掉重复的连通性测试（见 adminProxyToken.go）。
 func ProxyTest(req dto.OutProxy) dto.ReturnJsonDto {
 	p := normalizeProxyReq(req)
 	if p.Type == until.ProxyTypeNone {
 		return dto.ReturnJsonDto{Code: 1, Msg: "当前是无代理，无需测试", Type: "info",
 			Data: dto.OutProxyTestDto{OK: true}}
 	}
+	// 用**合并后**的配置去测：口令留空表示"不修改"，那这次测试就该用
+	// 库里存着的那份口令，而不是一个空口令 —— 否则每次都得把口令重打一遍
+	// 才能测出准结果。合并后测出来的结论，也才和保存时要落盘的那份一致。
+	if cfg := dao.GetConfig(); cfg != nil {
+		p = mergeProxyConn(cfg.OutProxy, p)
+	}
 	res := until.TestOutProxy(p)
 	log.Printf("代理连通性测试：协议=%s %s:%d 结果=%v 类型=%s 阶段=%s %s",
 		p.Type, p.Host, p.Port, res.OK, res.FailType, res.Stage, res.Detail)
+	verdict := proxyTestVerdict{OK: res.OK, FailType: res.FailType}
 	return dto.ReturnJsonDto{
 		Code: boolToCode(res.OK),
 		Msg:  proxyTestMsg(res),
@@ -111,8 +126,20 @@ func ProxyTest(req dto.OutProxy) dto.ReturnJsonDto {
 		Data: dto.OutProxyTestDto{
 			OK: res.OK, FailType: res.FailType, Stage: res.Stage,
 			Detail: res.Detail, LatencyMs: res.LatencyMs,
+			CanForce:  canForceSave(res),
+			TestToken: issueProxyTestToken(proxyFingerprint(p), verdict),
 		},
 	}
+}
+
+// canForceSave 判定「这次失败允许不允许强制保存」。
+//
+// 只有「代理能连上、但访问不了境外」允许：那种代理对只要访问国内资源的
+// 用途仍然有用，用户明说要就要，替他拦着没道理。
+// 而「连不上代理」时存下去必然是一条坏配置 —— 运行时的表现是各类抓取
+// 静默失败，比压根没配代理更难排查，所以这种失败不给强存的口子。
+func canForceSave(res until.ProxyTestResult) bool {
+	return !res.OK && res.FailType == until.ProxyFailOverseas
 }
 
 // ProxySave 保存代理的连接参数（协议/地址/端口/账密）。
@@ -120,38 +147,89 @@ func ProxyTest(req dto.OutProxy) dto.ReturnJsonDto {
 // 「无代理」这条特殊路径**不走测试**、直接落盘：它不连任何东西，
 // 测它只会得到一句"直连访问不了境外"的假失败，把"关掉代理"这个动作卡住。
 // 四个作用范围开关不在这里提交（沿用当前配置），改开关请走 ProxyScope。
-func ProxySave(req dto.OutProxy) dto.ReturnJsonDto {
+//
+// 测试不通过时**默认不落盘**；但失败类型是 overseas（代理通、只是出不去境外）
+// 且请求带了 force=1 时，允许用户坚持保存 —— 判据由服务端做，前端说了算不算数。
+//
+// 免测规则：请求带 testToken 且它对应的配置与这次要存的**逐字一致**
+// （协议/地址/端口/账号开关/用户名/口令都没动过）时，沿用那张凭据上的
+// 结论，不再重复走一遍外网探测。
+func ProxySave(req dto.OutProxySaveDto) dto.ReturnJsonDto {
 	cfg := dao.GetConfig()
 	if cfg == nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "配置还没加载完成，请稍后重试", Type: "danger"}
 	}
 
-	p := normalizeProxyReq(req)
+	p := normalizeProxyReq(req.OutProxy)
 	p = mergeProxyConn(cfg.OutProxy, p)
+	fp := proxyFingerprint(p)
 
 	// 有代理才测；无代理直接存。
 	if p.Type != until.ProxyTypeNone {
-		res := until.TestOutProxy(p)
-		if !res.OK {
-			log.Printf("代理配置未保存（测试不通过）：协议=%s %s:%d 类型=%s 阶段=%s %s",
-				p.Type, p.Host, p.Port, res.FailType, res.Stage, res.Detail)
-			return dto.ReturnJsonDto{
-				Code: 0,
-				Msg:  proxyTestMsg(res) + "，配置未保存",
-				Type: "danger",
-				Data: dto.OutProxyTestDto{
-					OK: false, FailType: res.FailType, Stage: res.Stage,
-					Detail: res.Detail, LatencyMs: res.LatencyMs,
-				},
+		// 凭据有效 ⇒ 这份配置刚才确实测过，结论已知。
+		//   结论是通过 ⇒ 直接存，不再重复探测外网；
+		//   结论是 overseas 失败且用户点了强制保存 ⇒ 直接强存
+		//     （用户已经看过失败结论并明确坚持，没必要再让他等一轮十几秒）。
+		// 其它情况（无凭据 / 凭据是 dial 失败）⇒ 老实重测一遍：
+		// 网络可能已经恢复，而"保存时又通了"是好事，值得再探一次。
+		if v, ok := verifyProxyTestToken(req.TestToken, fp); ok {
+			if v.OK {
+				log.Printf("代理配置已保存（沿用刚才的连通性测试结论，未重复测试）：协议=%s %s:%d",
+					p.Type, p.Host, p.Port)
+				return saveProxyConfig(cfg, p, "代理配置已保存")
+			}
+			if req.Force == 1 && v.FailType == until.ProxyFailOverseas {
+				log.Printf("代理配置已强制保存（沿用刚才测出的 overseas 失败结论）：协议=%s %s:%d",
+					p.Type, p.Host, p.Port)
+				cfg.OutProxy = p
+				dao.SetConfig(cfg)
+				return dto.ReturnJsonDto{
+					Code: 1,
+					Msg:  "已按你的要求强制保存代理配置（该代理访问不了境外站点，勾选了走代理的用途可能失败）",
+					Type: "warning",
+				}
 			}
 		}
-		cfg.OutProxy = p
+
+		res := until.TestOutProxy(p)
+		if !res.OK {
+			// 强制保存只认 overseas：连不上代理的那种失败不给出路。
+			// 现场重测仍是 overseas 时才允许强存 —— 强存依据的是
+			// 服务端**实测**到的失败类型，不是前端自报的一串字符。
+			if req.Force != 1 || !canForceSave(res) {
+				log.Printf("代理配置未保存（测试不通过）：协议=%s %s:%d 类型=%s 阶段=%s %s",
+					p.Type, p.Host, p.Port, res.FailType, res.Stage, res.Detail)
+				return dto.ReturnJsonDto{
+					Code: 0,
+					Msg:  proxyTestMsg(res) + "，配置未保存",
+					Type: "danger",
+					Data: dto.OutProxyTestDto{
+						OK: false, FailType: res.FailType, Stage: res.Stage,
+						Detail: res.Detail, LatencyMs: res.LatencyMs,
+						CanForce:  canForceSave(res),
+						TestToken: issueProxyTestToken(fp, proxyTestVerdict{OK: false, FailType: res.FailType}),
+					},
+				}
+			}
+			// 用户坚持保存：照存，但在日志与回话里都留痕，
+			// 免得日后排查"为什么升级一直失败"时忘了这一手。
+			log.Printf("代理配置已强制保存（测试不通过但用户坚持）：协议=%s %s:%d 类型=%s 阶段=%s %s",
+				p.Type, p.Host, p.Port, res.FailType, res.Stage, res.Detail)
+			cfg.OutProxy = p
+			dao.SetConfig(cfg)
+			return dto.ReturnJsonDto{
+				Code: 1,
+				Msg:  "已按你的要求强制保存代理配置（该代理访问不了境外站点，勾选了走代理的用途可能失败）",
+				Type: "warning",
+			}
+		}
 		msg := "代理配置已保存"
 		if res.LatencyMs > 0 {
 			msg += "，连接耗时 " + strconv.FormatInt(res.LatencyMs, 10) + " 毫秒"
 		}
 		// 必须走 SetConfig：只有它会置 configDirty 并把变更推给引擎。
 		// 直接改结构体再写盘的话，引擎侧永远收不到这次变更。
+		cfg.OutProxy = p
 		dao.SetConfig(cfg)
 		log.Printf("代理配置已保存：协议=%s %s:%d 范围 epg=%d src=%d up=%d relay=%d",
 			p.Type, p.Host, p.Port, p.UseEpg, p.UseSrc, p.UseUp, p.UseRelay)
@@ -162,6 +240,15 @@ func ProxySave(req dto.OutProxy) dto.ReturnJsonDto {
 	dao.SetConfig(cfg)
 	log.Printf("已关闭代理（地址与端口保留）：%s:%d", p.Host, p.Port)
 	return dto.ReturnJsonDto{Code: 1, Msg: "已关闭代理，四个作用范围已一并关闭", Type: "success"}
+}
+
+// saveProxyConfig 落盘一份代理配置（免测路径用）。
+func saveProxyConfig(cfg *dto.Config, p dto.OutProxy, msg string) dto.ReturnJsonDto {
+	cfg.OutProxy = p
+	dao.SetConfig(cfg)
+	log.Printf("代理配置已保存：协议=%s %s:%d 范围 epg=%d src=%d up=%d relay=%d",
+		p.Type, p.Host, p.Port, p.UseEpg, p.UseSrc, p.UseUp, p.UseRelay)
+	return dto.ReturnJsonDto{Code: 1, Msg: msg, Type: "success"}
 }
 
 // scopeKeys 允许单独提交的四个作用范围开关。

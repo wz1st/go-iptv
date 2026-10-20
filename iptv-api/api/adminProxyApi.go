@@ -42,13 +42,19 @@ func ProxyTest(c *gin.Context) {
 }
 
 // ProxySave 保存代理的连接参数，**测试不通过不落盘**。
-// POST /api/proxy/save   请求体同 ProxyTest。
+// POST /api/proxy/save   请求体同 ProxyTest，另可带 force / testToken。
 //
 // 四个作用范围开关（useEpg / useSrc / useUp / useRelay）**不在这里提交**，
 // 一律沿用当前配置；改开关走 ProxyScope。
 // type 为空（无代理）时跳过测试直接落盘，并把四个开关一并关闭。
+//
+// force=1 表示「测试没过也要存」：服务端只认 overseas（代理通、只是出不去境外）
+// 这一种失败，dial（连不上代理）给了 force 也不存 —— 那种配置存下去必然是坏的。
+//
+// testToken 是「测试代理」时拿到的凭据：配置没被改动过时沿用它的结论，
+// 省掉一次重复的外网探测。
 func ProxySave(c *gin.Context) {
-	var req dto.OutProxy
+	var req dto.OutProxySaveDto
 	if !bindJSON(c, &req) {
 		return
 	}
