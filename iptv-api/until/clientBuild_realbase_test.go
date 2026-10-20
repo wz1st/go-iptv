@@ -60,3 +60,51 @@ func baseHasHostLiteral(dir string) bool {
 	})
 	return found
 }
+
+// firstHostLiteral 取树里第一条站点地址字面量（不含 /getepg 之类子路径）。
+func firstHostLiteral(dir string) string {
+	re := regexp.MustCompile(`https?://[^\s"]*?/(?:iptv|apk/lt)`)
+	out := ""
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if out != "" || err != nil || d.IsDir() || filepath.Ext(p) != ".smali" {
+			return nil
+		}
+		b, _ := os.ReadFile(p)
+		if m := re.Find(b); m != nil {
+			out = string(m)
+		}
+		return nil
+	})
+	return out
+}
+
+// ★ 同址注入（注入地址 = 基底里已写死的那个地址）在**真实基底**上必须成功。
+//
+// 基底是 CI 打好地址的成品包，生产页面上填的又常是同一个站点，于是替换是
+// 恒等变换、字节一个不变；按「字节是否变化」计命中的旧实现会报
+// 「找不到服务端地址字面量」，并把排查方向误导到「换基底」上
+// （2026-10-20 生产 v4.7.1 + 0.33.0 基底 + 填 https://iptv.qingh.xyz 即此坑）。
+func TestPatchClientHostInSmali_RealBaseSameAddress(t *testing.T) {
+	base := os.Getenv("E2E_SMALI_DIR")
+	if base == "" {
+		base = "/home/test/iptv-build/client_qh/smali"
+	}
+	if fi, err := os.Stat(base); err != nil || !fi.IsDir() {
+		t.Skipf("真实基底 smali 目录不存在（%s），跳过", base)
+	}
+	tmp := t.TempDir()
+	smaliDst := filepath.Join(tmp, "smali")
+	if err := os.MkdirAll(smaliDst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(smaliDst, os.DirFS(base)); err != nil {
+		t.Fatalf("复制基底失败: %v", err)
+	}
+	lit := firstHostLiteral(smaliDst)
+	if lit == "" {
+		t.Skipf("基底 %s 里找不到站点地址字面量，跳过", base)
+	}
+	if err := patchClientHostInSmali(tmp, lit); err != nil {
+		t.Fatalf("同址注入（注入地址就是基底原地址 %s）必须成功，不能报找不到注入点: %v", lit, err)
+	}
+}

@@ -293,6 +293,13 @@ func rewriteClientResources(workDir string, v ClientBuildValues) error {
 // 「命中 0 或命中错串」。所以替换后再用 findUnpatchedHostLiterals 全量扫一遍
 // （它才是超集）：还有形如地址却没被换掉、且不以新 host 打头的 const-string 就
 // 直接报错，把「编出一个指向别处的包」挡在编译阶段。
+// ## 命中数必须按「正则匹配到」算，不能按「替换后字节变了」算
+//
+// 基底是 CI 打好地址的成品包：若本次注入地址与基底里写死的地址**逐字相同**
+// （生产上最常见 —— 页面就填基底里那个站点），替换是恒等变换，字节完全不变。
+// 按字节变化计数会把「注入点明明在这儿」误判成「一个注入点都没找到」，
+// 编译直接失败，报错还指向「这不是一份可注入的基底」，把人引向换基底的方向
+// （2026-10-20 生产 v4.7.1 + 0.33.0 基底 + 同址注入即此坑）。
 func patchClientHostInSmali(workDir, serverURL string) error {
 	host := strings.TrimRight(strings.TrimSpace(serverURL), "/")
 	if host == "" {
@@ -322,11 +329,15 @@ func patchClientHostInSmali(workDir, serverURL string) error {
 		if err != nil {
 			return err
 		}
-		out := re.ReplaceAll(data, []byte("${1}"+repl))
-		if bytes.Equal(out, data) {
+		if !re.Match(data) {
 			return nil
 		}
 		hits++
+		out := re.ReplaceAll(data, []byte("${1}"+repl))
+		if bytes.Equal(out, data) {
+			// 注入地址与基底原有地址逐字相同：命中了，但无需落盘。
+			return nil
+		}
 		return os.WriteFile(path, out, 0644)
 	})
 	if err != nil {
