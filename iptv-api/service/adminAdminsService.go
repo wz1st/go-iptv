@@ -157,6 +157,20 @@ func UpdataDownEngine() dto.ReturnJsonDto {
 }
 
 func Updata() dto.ReturnJsonDto {
+	kind := until.GetUpdataKind()
+	// 先落状态再通知启动器：反过来的话，api 可能在状态写盘前就被重启掉，
+	// 前端轮询到的会是"没在升级"，遮罩闪一下就没了。
+	until.SetUpdataProgress(kind, until.UpdataPhaseApply, 96,
+		"正在替换文件并重启管理系统，期间请勿关闭页面…")
 	go until.UpdateSignal()
 	return dto.ReturnJsonDto{Code: 1, Msg: "已触发更新，请稍后刷新...", Type: "success"}
+}
+
+// UpdataStatus 给前端升级遮罩轮询用。
+//
+// 这是「刷新页面 / 切换页面后遮罩自动恢复」的唯一依据：前端不问内存，
+// 只问服务端。running=false 时前端必须撤遮罩 —— 宁可早撤（用户再点一次），
+// 也不能卡死不动。
+func UpdataStatus() dto.ReturnJsonDto {
+	return dto.ReturnJsonDto{Code: 1, Msg: "ok", Type: "success", Data: until.UpdataStateView()}
 }

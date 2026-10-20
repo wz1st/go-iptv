@@ -80,7 +80,7 @@ func GetEpgListXml(name, url string) dto.XmlTV {
 	}
 
 	if !readCacheOk {
-		xmlByte = []byte(GetUrlData(epgUrl))
+		xmlByte = []byte(GetUrlDataVia(epgUrl, ProxyUseEpg))
 		if dao.Cache.Set(cacheKey, xmlByte) != nil {
 			dao.Cache.Delete(cacheKey)
 		}
@@ -118,7 +118,7 @@ func GetEpgCntv(name string) (dto.CntvJsonChannel, error) {
 	}
 
 	if !readCacheOk {
-		jsonStr := GetUrlData(epgUrl)
+		jsonStr := GetUrlDataVia(epgUrl, ProxyUseEpg)
 		err := json.Unmarshal([]byte(jsonStr), &cntvJson)
 		if err != nil {
 			return dto.CntvJsonChannel{}, err
@@ -141,7 +141,7 @@ func UpdataEpgList() bool {
 		log.Println("更新EPG源: ", list.Name)
 		cacheKey := EpgXmlCacheKey(list.Name)
 		dao.Cache.Delete(cacheKey)
-		xmlStr := GetUrlData(strings.TrimSpace(list.Url), list.UA)
+		xmlStr := GetUrlDataVia(strings.TrimSpace(list.Url), ProxyUseEpg, list.UA)
 		if xmlStr == "" {
 			failed = append(failed, list.Name+"(抓取为空)")
 			continue
@@ -216,7 +216,7 @@ func UpdataEpgListOne(list models.IptvEpgList, newAdd bool) (bool, error) {
 	log.Println("更新EPG源: ", list.Name)
 	cacheKey := EpgXmlCacheKey(list.Name)
 	dao.Cache.Delete(cacheKey)
-	xmlStr := GetUrlData(strings.TrimSpace(list.Url), list.UA)
+	xmlStr := GetUrlDataVia(strings.TrimSpace(list.Url), ProxyUseEpg, list.UA)
 	if xmlStr != "" {
 		xmlByte := []byte(xmlStr)
 		if dao.Cache.Set(cacheKey, xmlByte) != nil {

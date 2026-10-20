@@ -42,3 +42,9 @@ func UpdataDownEngine(c *gin.Context) {
 func Updata(c *gin.Context) {
 	reply(c, service.Updata())
 }
+
+// UpdataStatus 查询升级状态与进度（前端升级遮罩轮询）。
+// POST /api/updata/status  （无请求体）
+func UpdataStatus(c *gin.Context) {
+	reply(c, service.UpdataStatus())
+}

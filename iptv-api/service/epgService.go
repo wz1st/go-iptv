@@ -150,7 +150,7 @@ func getEpgCntv(name string) dto.ApkResponse {
 	}
 
 	if !readCacheOk {
-		jsonStr := until.GetUrlData(epgUrl)
+		jsonStr := until.GetUrlDataVia(epgUrl, until.ProxyUseEpg)
 		err := json.Unmarshal([]byte(jsonStr), &jsonMap)
 		if err != nil {
 			res.Data = []dto.Program{}
@@ -268,7 +268,7 @@ func getSimpleEpgCntv(name string) dto.SimpleResponse {
 	}
 
 	if !readCacheOk {
-		jsonStr := until.GetUrlData(epgUrl)
+		jsonStr := until.GetUrlDataVia(epgUrl, until.ProxyUseEpg)
 		err := json.Unmarshal([]byte(jsonStr), &jsonMap)
 		if err != nil {
 			simpleRes.Data = dto.Program{}

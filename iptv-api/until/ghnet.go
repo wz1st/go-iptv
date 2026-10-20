@@ -58,8 +58,16 @@ func ghLabel(prefix string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(prefix, "https://"), "/")
 }
 
-// ghTransport 每次新建，避免换链路后复用旧连接池；保留原有的 PROXY 环境变量支持。
+// ghTransport 每次新建，避免换链路后复用旧连接池。
+//
+// 代理优先级：先看「在线升级」这一路的代理开关（config.yml 的 out_proxy.use_up），
+// 没配才回退到历史上的 PROXY 环境变量。走配置而不是继续靠环境变量，是因为
+// 环境变量会把**整个进程**的默认 Transport 都带上代理（连本该直连的请求），
+// 而这里的代理只该作用在升级这条链路上。
 func ghTransport() *http.Transport {
+	if u := OutProxyURLFor(ProxyUseUp); u != nil {
+		return outProxyTransport(u)
+	}
 	tr := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -252,6 +260,15 @@ func ghGetJSON(raw string) ([]byte, *ghRoute, error) {
 
 // ghToFile 把资产整体落盘；空结果判失败（半截文件比报错更危险）。
 func ghToFile(prefix, raw, dst string, mode os.FileMode) error {
+	return ghToFileProgress(prefix, raw, dst, mode, nil)
+}
+
+// ghToFileProgress 下载到文件，并按已下载字节回调进度。
+//
+// onProgress 为 nil 时行为与原来的 ghToFile 完全一致。回调用来把真实下载
+// 进度报给前端的升级遮罩 —— 30MB 的包要下几十秒，只给"下载中"三个字的话，
+// 用户看到的是一片死寂，而不是"还剩多少"。
+func ghToFileProgress(prefix, raw, dst string, mode os.FileMode, onProgress func(done, total int64)) error {
 	resp, err := ghDo(prefix, raw, nil, ghFileTimeout)
 	if err != nil {
 		return err
@@ -262,7 +279,24 @@ func ghToFile(prefix, raw, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	total := resp.ContentLength // 服务器没给长度时是 -1
+	var done int64
+	if onProgress != nil {
+		if total < 0 {
+			total = 0
+		}
+		onProgress(0, total)
+	}
+	writer := io.Writer(f)
+	if onProgress != nil {
+		// 回调统一按「累计字节」给，累加放在闭包里 —— progressWriter 只报
+		// 本次写入了多少，两种语义混在一起迟早会在某个调用点用错。
+		writer = &progressWriter{w: f, onWrite: func(n int64) {
+			done += n
+			onProgress(done, total)
+		}}
+	}
+	if _, err := io.Copy(writer, resp.Body); err != nil {
 		f.Close()
 		os.Remove(dst)
 		return err
@@ -278,15 +312,35 @@ func ghToFile(prefix, raw, dst string, mode os.FileMode) error {
 	return nil
 }
 
+// progressWriter 写盘的同时把「本次写入了多少字节」报给上层。
+type progressWriter struct {
+	w       io.Writer
+	onWrite func(n int64)
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	if n > 0 && p.onWrite != nil {
+		p.onWrite(int64(n))
+	}
+	return n, err
+}
+
 // ghDownload 下载资产到 dst：先选路，失败则重新选路重试（含退避）。
 func ghDownload(raw, dst string, mode os.FileMode) (*ghRoute, error) {
+	return ghDownloadProgress(raw, dst, mode, nil)
+}
+
+// ghDownloadProgress 是 ghDownload 的带进度版本（换链路重试时同样会回调，
+// 每次重试都从 0 重新计数 —— 前端看到百分比回落是正常的，不必当成异常）。
+func ghDownloadProgress(raw, dst string, mode os.FileMode, onProgress func(done, total int64)) (*ghRoute, error) {
 	var lastErr error
 	for i := 0; i < 3; i++ {
 		route, err := ghPick(raw, i > 0)
 		if err != nil {
 			return nil, err
 		}
-		if err := ghToFile(route.Prefix, raw, dst, mode); err == nil {
+		if err := ghToFileProgress(route.Prefix, raw, dst, mode, onProgress); err == nil {
 			log.Printf("下载完成：经 %s，落盘 %s", route.Label, dst)
 			return route, nil
 		} else {

@@ -119,7 +119,8 @@ func AddList(req dto.ChannelsListReq) dto.ReturnJsonDto {
 	doRepeat := req.Dedup
 	iptvCategoryList.Dedup = req.Dedup
 
-	client := &http.Client{}
+	// 抓取走「频道源更新」这一路的代理开关（config.yml 的 out_proxy.use_src）。
+	client := &http.Client{Transport: until.OutProxyTransport(until.ProxyUseSrc)}
 	httpReq, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "获取频道列表失败-创建请求错误:" + err.Error(), Type: "danger"}
@@ -217,7 +218,8 @@ func UpdateList(req dto.ReqID) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "频道列表不存在", Type: "danger"}
 	}
 
-	client := &http.Client{}
+	// 抓取走「频道源更新」这一路的代理开关（config.yml 的 out_proxy.use_src）。
+	client := &http.Client{Transport: until.OutProxyTransport(until.ProxyUseSrc)}
 	httpReq, err := http.NewRequest("GET", iptvCategoryList.Url, nil)
 	if err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "获取频道列表失败-创建请求错误:" + err.Error(), Type: "danger"}

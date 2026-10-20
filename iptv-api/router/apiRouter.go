@@ -185,6 +185,14 @@ var adminRoutes = []apiRoute{
 	{"ssl/save", api.SslSave},
 	{"ssl/clear", api.SslClear},
 
+	// --- 出网代理（系统菜单）---
+	// 协议/地址/端口/账密 + 作用范围落在 config.yml 的 out_proxy 段；
+	// 保存前先实测连代理 + 访问 GitHub/Google，不通过不落盘（见 until/outProxy.go）。
+	// 注意与 engine/proxy 区分：那个是「中转」开关，中转取流走代理是这里的 useRelay。
+	{"proxy/data", api.ProxyData},
+	{"proxy/test", api.ProxyTest},
+	{"proxy/save", api.ProxySave},
+
 	// --- 引擎（改造前叫「授权 / license」）---
 	{"engine/data", api.EngineData},
 	{"engine/checkProxy", api.CheckProxy},
@@ -208,6 +216,8 @@ var adminRoutes = []apiRoute{
 	{"updata/downWeb", api.UpdataDownWeb},
 	{"updata/downEngine", api.UpdataDownEngine},
 	{"updata/run", api.Updata},
+	// 升级状态与进度：前端升级遮罩的唯一依据（刷新后靠它恢复）
+	{"updata/status", api.UpdataStatus},
 
 	// --- 订阅地址 ---
 	{"rss/url", api.GetRssUrl},

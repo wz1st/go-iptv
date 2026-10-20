@@ -76,7 +76,25 @@ func GetUrl(c *gin.Context) string {
 	return protocol + host + modifiedPath
 }
 
+// GetUrlData 直连取一个 URL 的内容。
+//
+// 它是本文件里被用得最广的出口，调用方里既有 EPG 抓取、也有本机回环探测
+// （中转 /status、引擎 :82）和 IP 归属地查询 —— 只有第一类该走代理。
+// 所以这里**固定直连**，要代理的调用方改用 GetUrlDataVia 并指名用途。
 func GetUrlData(url string, ua ...string) string {
+	return getUrlData(url, proxyUseNone, ua...)
+}
+
+// GetUrlDataVia 按用途取 URL 内容：purpose 命中代理开关就走代理，否则直连。
+// 代理见 until/outProxy.go（config.yml 的 out_proxy 段）。
+func GetUrlDataVia(url string, purpose int, ua ...string) string {
+	return getUrlData(url, purpose, ua...)
+}
+
+// proxyUseNone 表示「这一步不该走代理」，与 outProxy.go 的用途常量区分开。
+const proxyUseNone = -1
+
+func getUrlData(url string, purpose int, ua ...string) string {
 	defaultUA := "Go-http-client/1.1"
 	useUA := defaultUA
 
@@ -92,6 +110,9 @@ func GetUrlData(url string, ua ...string) string {
 	req.Header.Set("User-Agent", useUA)
 
 	client := &http.Client{}
+	if purpose != proxyUseNone {
+		client.Transport = OutProxyTransport(purpose)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Println(url, " 请求失败:", err)

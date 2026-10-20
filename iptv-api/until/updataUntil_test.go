@@ -420,7 +420,7 @@ func TestStageUpdataReportsMissingAsset(t *testing.T) {
 		{map[string]string{"iptv_amd64": "x"}, apiSumsName, [][2]string{{"iptv_amd64", "iptv"}}, apiSumsName},
 		{map[string]string{"engine_amd64": "x"}, engineSumsName, [][2]string{{"engine_amd64", "engine"}}, engineSumsName},
 	} {
-		_, _, err := stageUpdata(rel, tc.assets, tc.sums, tc.pairs)
+		_, _, err := stageUpdata("web", rel, tc.assets, tc.sums, tc.pairs)
 		if err == nil {
 			t.Fatalf("资产/清单缺失时应报错（%s）", tc.miss)
 		}

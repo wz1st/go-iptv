@@ -326,10 +326,15 @@ func CheckNewVerEngine(local string) (bool, string, error) {
 
 // downloadFile 下载资产。走直连还是国内加速由 ghnet.go 决定，失败或延迟过大会自动切换。
 func downloadFile(urlStr, dst string) error {
+	return downloadFileWith(urlStr, dst, nil)
+}
+
+// downloadFileWith 带进度回调的下载。onProgress 为 nil 时行为与原来一致。
+func downloadFileWith(urlStr, dst string, onProgress func(done, total int64)) error {
 	if urlStr == "" {
 		return fmt.Errorf("下载URL为空")
 	}
-	if _, err := ghDownload(urlStr, dst, 0644); err != nil {
+	if _, err := ghDownloadProgress(urlStr, dst, 0644, onProgress); err != nil {
 		return fmt.Errorf("下载失败: %v", err)
 	}
 	return nil
@@ -408,7 +413,7 @@ func downloadDir() string { return "/tmp/down" }
 // sumsName 是校验清单资产名；pairs 为 [原始资产名, 落地名] 序列。
 // 落地名是 iptv / engine 这类可执行二进制时才补可执行位；webdist.tar.gz 等
 // 整包保持默认权限即可（启动器按文件名识别、解包应用）。
-func stageUpdata(rel *githubRelease, assets map[string]string, sumsName string, pairs [][2]string) (bool, string, error) {
+func stageUpdata(kind string, rel *githubRelease, assets map[string]string, sumsName string, pairs [][2]string) (bool, string, error) {
 	// 先确认资产都在。这一步单独做，是为了让「CI 改了资产名」这种失误
 	// 报成一句能直接看懂的话，而不是后面某处"文件不存在"。
 	for _, p := range pairs {
@@ -425,19 +430,46 @@ func stageUpdata(rel *githubRelease, assets map[string]string, sumsName string, 
 	os.MkdirAll(downDir, 0755)
 	os.MkdirAll(upDir, 0755)
 
+	// 进度分段：0-8 取校验清单，8-88 下载资产（按字节加权），88-95 校验与落盘，
+	// 剩下的 5% 留给"替换文件 + 重启进程"（Updata 之后由启动阶段收尾）。
+	//
+	// 刻意不追求精确到字节：清单与资产是**串行**下载的，且重试会让百分比回退，
+	// 报一个近似值比报一个抖动的精确值更可信。
+	SetUpdataProgress(kind, UpdataPhaseFetch, 2, "正在获取升级包信息…")
+
 	localSums := filepath.Join(downDir, sumsName)
 	if err := downloadFile(assets[sumsName], localSums); err != nil {
+		SetUpdataFailed(kind, "获取校验清单失败："+err.Error())
 		return false, "", err
 	}
 	sums := loadSums(localSums)
 
 	// 逐项下载 + 校验（先全部下完再落地，坏一个不污染待安装区）。
-	for _, p := range pairs {
+	for i, p := range pairs {
 		local := filepath.Join(downDir, p[0])
-		if err := downloadFile(assets[p[0]], local); err != nil {
+		base := 8 + (80*i)/len(pairs)
+		span := (80 / len(pairs))
+		if i == len(pairs)-1 {
+			span = 88 - base
+		}
+		label := p[0]
+		SetUpdataProgress(kind, UpdataPhaseFetch, base, "正在下载 "+label+"…")
+		// 单个文件的百分比换算到全局区间：只在这一层做换算，
+		// 免得每个调用点各写一遍区间公式（写错一次就是进度条乱跳）。
+		onProgress := func(done, total int64) {
+			pct := base
+			if total > 0 {
+				pct = base + int((int64(span)*done)/total)
+			}
+			reportUpdataProgress(kind, UpdataPhaseFetch, pct, "正在下载 "+label+"…")
+		}
+		if err := downloadFileWith(assets[p[0]], local, onProgress); err != nil {
+			SetUpdataFailed(kind, "下载 "+label+" 失败："+err.Error())
 			return false, "", err
 		}
+		SetUpdataProgress(kind, UpdataPhaseVerify, base+span, "正在校验 "+label+"…")
 		if !verifySHA(local, sums) {
+			SetUpdataFailed(kind, label+" 校验失败")
 			return false, "", fmt.Errorf("%s 校验失败", p[0])
 		}
 	}
@@ -449,17 +481,42 @@ func stageUpdata(rel *githubRelease, assets map[string]string, sumsName string, 
 	for _, p := range pairs {
 		dst := filepath.Join(upDir, p[1])
 		if err := copyFile(filepath.Join(downDir, p[0]), dst); err != nil {
+			SetUpdataFailed(kind, "写入待安装文件失败："+err.Error())
 			return false, "", err
 		}
 		// 只有可执行二进制（iptv / engine）需要可执行位；整包保持默认权限。
 		if p[1] == "iptv" || p[1] == "engine" {
 			if err := os.Chmod(dst, 0755); err != nil {
+				SetUpdataFailed(kind, "设置可执行权限失败："+err.Error())
 				return false, "", err
 			}
 		}
 	}
 
+	SetUpdataProgress(kind, UpdataPhaseReady, 95, "升级包已下载完成，确认后开始安装")
 	return true, rel.TagName, nil
+}
+
+// reportUpdataProgress 带节流地写状态。
+//
+// 下载字节回调每秒能触发几十次，每次都写一次 JSON 是在**跟磁盘过不去**；
+// 而前端 1s 轮询一次，300ms 一写完全够用。
+func reportUpdataProgress(kind, phase string, percent int, msg string) {
+	now := time.Now().UnixMilli()
+	updataMu.Lock()
+	defer updataMu.Unlock()
+	// 距离上次落盘不到 300ms 就跳过：前端 1s 轮询一次，写再密也是白写磁盘。
+	if now-updataCache.updatedMs < 300 && updataCache.Percent == percent && updataCache.Phase == phase {
+		return
+	}
+	// 进度只许前进：换链路重试会让字节回调从 0 重新计数，
+	// 百分比一回落就说明用户看到"进度条往回走"，比不精确更糟。
+	if percent < updataCache.Percent && phase == updataCache.Phase {
+		return
+	}
+	writeUpdataStateLocked(updataState{
+		Kind: kind, Phase: phase, Percent: percent, Msg: msg,
+	})
 }
 
 // DownloadAndVerifyWeb 下载「管理系统(api) + 前端(webdist)」整包到待安装区。
@@ -479,7 +536,7 @@ func DownloadAndVerifyWeb(arch string) (bool, string, error) {
 		return false, "", fmt.Errorf("发布 %s 未提供前端产物 %s，请更新镜像", rel.TagName, frontAssetName)
 	}
 	binary := "iptv_" + arch
-	return stageUpdata(rel, assets, apiSumsName, [][2]string{
+	return stageUpdata("web", rel, assets, apiSumsName, [][2]string{
 		{binary, "iptv"},
 		{frontAssetName, frontAssetName},
 	})
@@ -494,7 +551,7 @@ func DownloadAndVerifyEngine(arch string) (bool, string, error) {
 		return false, "", err
 	}
 	binary := "engine_" + arch
-	return stageUpdata(rel, assetURLs(rel), engineSumsName, [][2]string{{binary, "engine"}})
+	return stageUpdata("engine", rel, assetURLs(rel), engineSumsName, [][2]string{{binary, "engine"}})
 }
 
 // logCheckErr 只对真正的故障打"连接失败"。

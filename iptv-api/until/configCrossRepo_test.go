@@ -176,6 +176,7 @@ var engineRequiredKeys = []struct {
 	{"build_lt", "骆驼壳的编译参数（应用名/版本号）；漏了则授权失效后骆驼壳参数被清空"},
 	{"server_url_lt", "骆驼壳的 APK 连接地址（与清和壳各存一份）；漏了则授权失效后地址被清空，编出来的包连不上"},
 	{"mytv", "MyTV 客户端的独立配置段（引擎要用）；漏了则整份重写会把 mytv 段抹掉"},
+	{"out_proxy", "出网代理（协议/地址/端口/账密/作用范围，中转取流用 use_relay）；漏了则授权失效后代理配置被清空"},
 }
 
 // TestEngineRequiredKeysDeclaredInAPI 钉住 api 侧 dto.Config 声明了上面这些键。
