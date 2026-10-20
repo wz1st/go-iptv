@@ -20,13 +20,16 @@ import (
 //
 // 测试失败**不落盘**，并把失败类型原样回给前端（dial / overseas）。
 
-// relayAllowed 中转取流走代理只对授权用户开放。
+// relayAllowed 中转取流走代理对**全部授权账号**开放，不限授权类型。
 //
-// 判据与引擎侧 applyConfigDefaults 一致：只有 License.Type==4（定制授权）
-// 才允许改站点相关的行为。api 侧读的是引擎心跳带回来的授权快照
-// （dao.GetLic），不是自己解 license.lic。
+// 判据用 dao.LicStillValid()（Type>=2，或 Type==1 且未过期），与中转开关
+// 本身走的是同一把尺 —— EnforceLicenseGate 在授权失效时就是把
+// cfg.Proxy.Status 落 0，用的是它。早先这里按 Type==4（定制授权）卡，
+// 于是普通授权账号明明能开中转、却配不了中转的代理，界面与实际能力对不上。
+//
+// api 侧读的是引擎心跳带回来的授权快照（dao.GetLic），不自己解 license.lic。
 func relayAllowed() bool {
-	return dao.GetLic().Type == 4
+	return dao.LicStillValid()
 }
 
 // ProxyData 代理页初始数据。
@@ -48,7 +51,7 @@ func ProxyData() dto.OutProxyDataDto {
 }
 
 // normalizeProxyReq 在 until.NormalizeOutProxy 的归一之外，再加一条本层的规矩：
-// 中转这一路只有授权用户能用，非授权用户提交什么都会被抹平。
+// 中转这一路只有授权账号能用，未授权时提交什么都会被抹平。
 func normalizeProxyReq(in dto.OutProxy) dto.OutProxy {
 	out := until.NormalizeOutProxy(in)
 	if !relayAllowed() {

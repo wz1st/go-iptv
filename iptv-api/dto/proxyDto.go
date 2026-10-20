@@ -4,8 +4,9 @@ package dto
 
 // OutProxyDataDto 代理页的初始数据：配置本身 + 「中转」这项能不能勾。
 //
-// RelayAllowed 是给前端的硬约束：只有授权用户（License.Type==4）才允许
-// 让中转取流走代理。前端据此隐藏该勾选项，后端保存时还会再挡一次 ——
+// RelayAllowed 是给前端的硬约束：全部授权账号都可让中转取流走代理
+// （不限授权类型，判据 = dao.LicStillValid()，与中转开关本身同一把尺）。
+// 前端据此禁用该勾选项，后端保存时还会再挡一次 ——
 // 隐藏只是让界面诚实，后端才是真正的关卡。
 type OutProxyDataDto struct {
 	OutProxy

@@ -92,7 +92,7 @@ type OutProxy struct {
 	UseEpg   int64 `mapstructure:"use_epg" json:"useEpg" yaml:"use_epg"`       // EPG 更新
 	UseSrc   int64 `mapstructure:"use_src" json:"useSrc" yaml:"use_src"`       // 频道源更新
 	UseUp    int64 `mapstructure:"use_up" json:"useUp" yaml:"use_up"`          // 在线升级（默认选中）
-	UseRelay int64 `mapstructure:"use_relay" json:"useRelay" yaml:"use_relay"` // 中转取流（限 SOCKS5，仅授权用户）
+	UseRelay int64 `mapstructure:"use_relay" json:"useRelay" yaml:"use_relay"` // 中转取流（限 SOCKS5，全部授权账号可用）
 }
 
 type Resolution struct {
