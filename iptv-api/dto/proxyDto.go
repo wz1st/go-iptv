@@ -13,6 +13,17 @@ type OutProxyDataDto struct {
 	RelayAllowed bool `json:"relayAllowed"`
 }
 
+// OutProxyScopeDto 单独提交一个作用范围开关（/api/proxy/scope）。
+//
+// 四个开关各自即时生效，不跟「保存配置」捆在一起 —— 拨开关就想看到结果，
+// 还要再点一次保存才生效，是把一次简单操作变成两步的典型反模式。
+type OutProxyScopeDto struct {
+	// Key 开关名：useEpg / useSrc / useUp / useRelay。
+	Key string `json:"key"`
+	// Value 只接受 0（关）或 1（开）。允许全关 —— 那就是"暂时不用代理"。
+	Value int64 `json:"value"`
+}
+
 // OutProxyTestDto 保存前的连通性测试结果。
 //
 // FailType 直接回给前端选文案：""=通过，"dial"=代理连不通，

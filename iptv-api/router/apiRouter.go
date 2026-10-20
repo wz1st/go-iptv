@@ -192,6 +192,8 @@ var adminRoutes = []apiRoute{
 	{"proxy/data", api.ProxyData},
 	{"proxy/test", api.ProxyTest},
 	{"proxy/save", api.ProxySave},
+	// 作用范围开关单独提交：拨开关即生效，不与「保存配置」捆绑
+	{"proxy/scope", api.ProxyScope},
 
 	// --- 引擎（改造前叫「授权 / license」）---
 	{"engine/data", api.EngineData},

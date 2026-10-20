@@ -103,7 +103,12 @@ func NormalizeOutProxy(in dto.OutProxy) dto.OutProxy {
 	host, port := resolveProxyAddr(in)
 	out.Host, out.Port = host, port
 	if out.Type == ProxyTypeNone {
-		out.Host, out.Port, out.AuthOn, out.User, out.Pwd = "", 0, 0, "", ""
+		// 无代理**保留地址与端口**：用户下次想开回来时不该还要重填一遍，
+		// 而"清空输入框"对判断有没有配过代理也没有任何帮助（协议已经说明了）。
+		//
+		// 但四个作用范围一律落 0：没配代理却勾着「走代理」，运行时表现是
+		// 静默直连 —— 和"配了但代理坏了"长得一模一样，排查时最容易误判。
+		out.UseEpg, out.UseSrc, out.UseUp, out.UseRelay = 0, 0, 0, 0
 	}
 	if out.AuthOn != 1 {
 		out.User, out.Pwd = "", ""
