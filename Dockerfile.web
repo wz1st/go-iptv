@@ -34,7 +34,7 @@ COPY mytv /app/mytv
 # 构建容器内 Permission denied），apk add 会报 "no such package" 但 **buildkit
 # 仍当该层成功**，产出缺 nginx/openjdk/ffmpeg 的残镜像（315MB vs 正常 693MB），
 # 容器一起来就死。此前没暴露只因该层命中过 CACHED。
-RUN sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#https://mirrors.tuna.tsinghua.edu.cn/alpine#g" /etc/apk/repositories
+# RUN sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#https://mirrors.tuna.tsinghua.edu.cn/alpine#g" /etc/apk/repositories
 RUN apk add --no-cache \
         openjdk17 \
         bash \
