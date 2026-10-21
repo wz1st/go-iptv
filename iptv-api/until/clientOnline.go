@@ -2,6 +2,7 @@ package until
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,6 +74,12 @@ func DownloadClientBase(rel *ClientBaseRelease) (string, string, error) {
 	apk := filepath.Join(dir, clientReleaseAsset)
 	ver := filepath.Join(dir, clientVerAsset)
 
+	// 客户端基底下载走的是「在线升级」那一个作用范围（config.yml 的
+	// out_proxy.use_up）—— 它与管理系统/引擎升级、mytv 基底同属一条出网链路
+	// （都经 ghnet/ghTransport），所以那一路的开关对这里同样生效。
+	// 显式打一行：用户开完 useUp 后要能确认"连客户端基底也走代理了"。
+	log.Printf("客户端基底在线升级：%s %s", rel.Tag, ghOutProxyDesc())
+
 	if _, err := ghDownload(rel.ApkURL, apk, 0644); err != nil {
 		os.RemoveAll(dir)
 		return "", "", fmt.Errorf("下载客户端基底失败: %v", err)
@@ -141,6 +148,10 @@ func DownloadLuotuoBase(rel *ClientBaseRelease) (string, string, error) {
 	}
 	apk := filepath.Join(dir, luotuoReleaseAsset)
 	ver := filepath.Join(dir, luotuoVerAsset)
+
+	// 与清和壳同一条出网链路（同走 ghnet），所以「在线升级」那一个作用范围
+	// （out_proxy.use_up）对骆驼壳基底同样生效。
+	log.Printf("骆驼壳基底在线升级：%s %s", rel.Tag, ghOutProxyDesc())
 
 	if _, err := ghDownload(rel.ApkURL, apk, 0644); err != nil {
 		os.RemoveAll(dir)

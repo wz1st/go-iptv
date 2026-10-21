@@ -426,9 +426,27 @@ func stageUpdata(kind string, rel *githubRelease, assets map[string]string, sums
 	}
 
 	downDir := downloadDir()
-	upDir := "/config/updata"
+	upDir := updataDir()
 	os.MkdirAll(downDir, 0755)
 	os.MkdirAll(upDir, 0755)
+
+	// 目标版本（引擎链路的标签先剥 engine- 前缀，后面比对与记录都用它）。
+	target := updataTargetVersion(kind, rel.TagName)
+
+	// 开下载的第一件事就是把"这次出网走没走代理"说清楚。之前所有日志里
+	// 只有"直连 / gh-proxy.org"这种链路名，用户开完 useUp 只能靠猜 ——
+	// 这一行让"代理到底有没有参与在线升级"在日志里一眼可见。
+	log.Printf("在线升级开始：链路=%s 目标=%s %s", kind, rel.TagName, ghOutProxyDesc())
+
+	// 「已下载未安装」复用：待安装区里已经有这一版的完整产物且哈希对得上，
+	// 就不必再下一遍 30MB。判据见 reusableStaged —— 逐个文件重算 sha256，
+	// 文件被截断/覆盖/改动都会在这里被否掉。
+	if why := reusableStaged(kind, target, rel.TagName, pairs); why != "" {
+		log.Printf("复用已下载产物，跳过下载：%s", why)
+		SetUpdataProgress(kind, UpdataPhaseReady, 95, "升级包已就绪（复用已下载的同一版本），确认后开始安装")
+		SetUpdataTarget(kind, target)
+		return true, rel.TagName, nil
+	}
 
 	// 进度分段：0-8 取校验清单，8-88 下载资产（按字节加权），88-95 校验与落盘，
 	// 剩下的 5% 留给"替换文件 + 重启进程"（Updata 之后由启动阶段收尾）。
@@ -494,7 +512,22 @@ func stageUpdata(kind string, rel *githubRelease, assets map[string]string, sums
 	}
 
 	SetUpdataProgress(kind, UpdataPhaseReady, 95, "升级包已下载完成，确认后开始安装")
+	// 记下这轮的目标版本与各产物哈希：下次同一版本再来时校验通过就能直接
+	// 复用，不必重下（判据见 reusableStaged）。
+	SetUpdataTarget(kind, target)
+	rememberStaged(kind, target, rel.TagName, pairs, sums)
 	return true, rel.TagName, nil
+}
+
+// updataTargetVersion 把 release 标签归一成"版本号"形态。
+//
+// 引擎链路的标签是 engine-vX.Y.Z，而引擎自报的是 X.Y.Z（至多带个 v）——
+// 两边直接比字符串永远不相等，所以这里先把前缀剥掉。
+func updataTargetVersion(kind, tag string) string {
+	if kind == "engine" {
+		return strings.TrimPrefix(tag, engineTagPrefix)
+	}
+	return tag
 }
 
 // reportUpdataProgress 带节流地写状态。

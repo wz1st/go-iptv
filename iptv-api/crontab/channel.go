@@ -215,6 +215,7 @@ func UpdateList() {
 //
 // 抓取走「频道源更新」这一路的代理开关（config.yml 的 out_proxy.use_src）。
 func updateSource(list models.IptvCategoryList) {
+	until.LogProxyUse(until.ProxyUseSrc, list.Url, true)
 	client := &http.Client{Transport: until.OutProxyTransport(until.ProxyUseSrc)}
 	req, err := http.NewRequest("GET", strings.TrimSpace(list.Url), nil)
 	if err != nil {

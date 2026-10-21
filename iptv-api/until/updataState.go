@@ -5,9 +5,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"iptv-api/dao"
 	"iptv-api/dto"
 )
 
@@ -61,6 +63,11 @@ type updataState struct {
 	Msg     string `json:"msg"`
 	// Failed 非空表示失败原因（同时 Phase=failed）。
 	Failed string `json:"failed"`
+	// Version 是"这一轮要装上去的版本号"（引擎是 vX.Y.Z，管理系统是标签）。
+	// 引擎升级时 api 进程**不会重启**（启动器只重启被替换掉的那个子进程），
+	// 所以没人来把状态收成 done —— 靠 UpdataStateView 拿它跟引擎实际版本
+	// 比对来收尾。空串表示"没记目标版本"，那就不做这个判定。
+	Version string `json:"version"`
 	// StartedAt / UpdatedAt 是 Unix 秒。UpdatedAt 还兼任**陈旧判定**：
 	// 进程在升级中途被 kill 时不会有"完成"那一步，只能靠它过期来收尾。
 	StartedAt int64 `json:"startedAt"`
@@ -139,6 +146,11 @@ func writeUpdataStateLocked(st updataState) {
 }
 
 // SetUpdataProgress 上报一次进度（阶段 + 百分比 + 提示语）。
+//
+// 目标版本（Version）在这里**必须原样带过去**：它是整份覆盖写，不显式带上
+// 就会被抹掉；而 Updata() 那一步（apply 阶段）也走本函数，抹掉之后引擎侧
+// 就再也判不出"是否已经换成新版"，状态会一直挂在 apply 上直到 10 分钟
+// 后被当成"升级中断"。判据见 UpdataStateView 里的 engineTargetReached。
 func SetUpdataProgress(kind, phase string, percent int, msg string) {
 	if percent < 0 {
 		percent = 0
@@ -146,7 +158,26 @@ func SetUpdataProgress(kind, phase string, percent int, msg string) {
 	if percent > 100 {
 		percent = 100
 	}
-	writeUpdataState(updataState{Kind: kind, Phase: phase, Percent: percent, Msg: msg})
+	// 换一条链路重试会让 kind 变不了，但下载与安装是同一条链路，所以这里
+	// 只在 kind 一致时继承目标版本，避免上一条链路残留的值被算到这一条头上。
+	version := ""
+	if st := readUpdataState(); st.Kind == kind {
+		version = st.Version
+	}
+	writeUpdataState(updataState{
+		Kind: kind, Phase: phase, Percent: percent, Msg: msg, Version: version,
+	})
+}
+
+// SetUpdataTarget 记录这轮要装的目标版本。
+//
+// 只在**包已下好**那一刻调用：此后每次进度上报都要保住它（SetUpdataProgress
+// 是整份覆盖写，不显式带上就会被抹掉），引擎侧据此判定"是否已经换成新版"。
+func SetUpdataTarget(kind, version string) {
+	st := readUpdataState()
+	st.Kind = kind
+	st.Version = version
+	writeUpdataState(st)
 }
 
 // SetUpdataFailed 记一次失败。前端据此把遮罩撤掉并把原因显示出来 ——
@@ -173,6 +204,61 @@ func SetUpdataDone(kind, msg string) {
 // 十分钟没有任何更新的状态不可能还在跑 —— 真在下载 30MB 的包也是持续写进度的。
 const updataStaleAfter = 10 * time.Minute
 
+// engineTargetReached 判断引擎当前版本是否已经达到这轮的目标版本。
+//
+// 为什么需要它：升级引擎时启动器只重启 engine 子进程，**api 一直在跑**，
+// 于是没人执行 FinishUpdataOnBoot —— 状态会永远停在 apply，前端遮罩
+// 钉死十分钟，最后还被当成"升级中断"报给用户。
+//
+// 判据用"引擎自己报的版本"而不是"文件存在"：文件在只说明启动器替换过，
+// 引擎还没起来时那个文件就是新的、进程却跑着旧的。
+//
+// 三种情况都返回 false（继续等，不猜）：
+//   - 没记目标版本（老状态文件 / 非引擎链路）
+//   - 问不到引擎版本（WS 断了且执行 -version 也失败）——此时宁可等满
+//     陈旧判定，也不要把一次好端端的升级误报成失败。
+//   - 版本还比目标低：替换还没生效。
+func engineTargetReached(target string) bool {
+	if target == "" {
+		return false
+	}
+	cur := ""
+	if verJSON, err := dao.WS.SendWS(dao.Request{Action: "getVersion"}); err == nil {
+		var s string
+		if json.Unmarshal(verJSON.Data, &s) == nil {
+			cur = strings.TrimSpace(s)
+		}
+	}
+	if cur == "" {
+		cur = EngineVersion()
+	}
+	if cur == "" {
+		return false
+	}
+	// 目标是 vX.Y.Z（下载时已去掉 engine- 前缀），引擎自报可能带不带 v 都能比。
+	return cmpVersion(versionParts(target), versionParts(cur)) <= 0
+}
+
+// settleEngineUpdata 引擎已经换成目标版本 ⇒ 把状态收成 done。
+// 返回是否真的收掉了。
+func settleEngineUpdata(st updataState) bool {
+	if st.Kind != "engine" || st.Version == "" {
+		return false
+	}
+	if st.Phase != UpdataPhaseApply && st.Phase != UpdataPhaseStage {
+		return false
+	}
+	if !engineTargetReached(st.Version) {
+		return false
+	}
+	log.Printf("引擎已升级到 %s，收尾升级状态", st.Version)
+	writeUpdataState(updataState{
+		Kind: st.Kind, Phase: UpdataPhaseDone, Percent: 100,
+		Msg: "升级已完成，引擎已重启", Version: st.Version,
+	})
+	return true
+}
+
 // UpdataStateView 返回给前端的升级状态。
 //
 // running=false 时前端不该显示遮罩 —— 这是「刷新后恢复」的唯一依据：
@@ -188,6 +274,13 @@ func UpdataStateView() dto.UpdataStateDto {
 		Msg:       st.Msg,
 		Failed:    st.Failed,
 		StartedAt: st.StartedAt,
+	}
+
+	// 引擎升级没有"api 重启"这个天然的收尾时机（只有 engine 子进程被重启），
+	// 所以这里先按实际引擎版本收一次；收掉了就走下面的 done 分支返回。
+	if settleEngineUpdata(st) {
+		st = readUpdataState()
+		view.Phase, view.Percent, view.Msg = st.Phase, st.Percent, st.Msg
 	}
 
 	switch st.Phase {
@@ -208,6 +301,7 @@ func UpdataStateView() dto.UpdataStateDto {
 			writeUpdataState(updataState{
 				Kind: st.Kind, Phase: UpdataPhaseFailed, Failed: view.Failed,
 				Msg: view.Failed, Percent: st.Percent, StartedAt: st.StartedAt,
+				Version: st.Version,
 			})
 		} else {
 			view.Running = true
@@ -236,7 +330,7 @@ func FinishUpdataOnBoot() {
 	log.Printf("启动时收尾升级状态：上一轮停在 %s（%d%%），进程能起来即视为替换完成", st.Phase, st.Percent)
 	writeUpdataState(updataState{
 		Kind: st.Kind, Phase: UpdataPhaseDone, Percent: 100,
-		Msg: "升级已完成，管理系统已重启",
+		Msg: "升级已完成，管理系统已重启", Version: st.Version,
 	})
 }
 

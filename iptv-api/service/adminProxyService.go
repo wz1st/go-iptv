@@ -297,7 +297,59 @@ func ProxyScope(req dto.OutProxyScopeDto) dto.ReturnJsonDto {
 	set(&cfg.OutProxy, req.Value)
 	dao.SetConfig(cfg)
 	log.Printf("作用范围开关已更新：%s=%d", req.Key, req.Value)
+	// 拨完开关立刻说清"这一路现在到底走没走代理"。四个开关都是**即时生效**
+	// 的（api 侧每次出网都重读配置），但"即时生效"不等于"用户看得见" ——
+	// 中转那一路还要经引擎 ApplyRelayProxy 换上 Transport，光有一行
+	// 「useRelay=1」并不能证明取流真的挂了代理。
+	reportProxyScopeEffect(req.Key, req.Value)
 	return dto.ReturnJsonDto{Code: 1, Msg: "已保存", Type: "success"}
+}
+
+// reportProxyScopeEffect 在改完作用范围开关后，打出这一路当前的实际状态。
+//
+// 三个开关（EPG / 频道源 / 在线升级）在 api 侧，当场就能判定；中转那一路
+// 在引擎侧生效，api 只能报"配置已下发"，真正换上取流 Transport 要等引擎
+// 心跳把配置对账过去（proxy.ApplyRelayProxy）—— 所以措辞上区分开，
+// 不给用户"已经生效"的错觉。
+func reportProxyScopeEffect(key string, value int64) {
+	purpose, ok := scopePurpose[key]
+	if !ok {
+		return
+	}
+	if value == 0 {
+		log.Printf("作用范围已关闭：%s（该用途改为直连）", proxyPurposeText(purpose))
+		return
+	}
+	if purpose == until.ProxyUseRelay {
+		log.Printf("作用范围已开启：中转取流走代理（已下发配置，引擎换上取流代理后本条生效；" +
+			"引擎侧日志会打印「中转取流已启用 SOCKS5 代理」）")
+		return
+	}
+	until.LogProxyUse(purpose, "（下次出网时生效）", false)
+}
+
+// scopePurpose 把四个开关名映射到 until 里的用途常量。
+// 与 scopeKeys 一一对应 —— 两个表分开放是为了让"能改什么"与"这是什么"
+// 各管一件事，但**必须同步增删**：少一个就会出现"能改但判不出用途"的开关。
+var scopePurpose = map[string]int{
+	"useEpg":   until.ProxyUseEpg,
+	"useSrc":   until.ProxyUseSrc,
+	"useUp":    until.ProxyUseUp,
+	"useRelay": until.ProxyUseRelay,
+}
+
+func proxyPurposeText(purpose int) string {
+	switch purpose {
+	case until.ProxyUseEpg:
+		return "EPG 更新"
+	case until.ProxyUseSrc:
+		return "频道源更新"
+	case until.ProxyUseUp:
+		return "在线升级"
+	case until.ProxyUseRelay:
+		return "中转取流"
+	}
+	return "未知用途"
 }
 
 // proxyTestMsg 把测试结论翻成一句能直接显示的话。

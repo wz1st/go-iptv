@@ -2,6 +2,7 @@ package until
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -92,6 +93,10 @@ func DownloadMytvBase(rel *MytvBaseRelease) (string, string, error) {
 	}
 	apk := filepath.Join(dir, mytvBaseAsset)
 	ver := filepath.Join(dir, mytvVersionAsset)
+
+	// 与另两条客户端基底同属一条出网链路（都走 ghnet），所以「在线升级」那一个
+	// 作用范围（out_proxy.use_up）对 MyTV 基底同样生效。
+	log.Printf("MyTV 基底在线升级：%s %s", rel.Tag, ghOutProxyDesc())
 
 	if _, err := ghDownload(rel.ApkURL, apk, 0644); err != nil {
 		os.RemoveAll(dir)

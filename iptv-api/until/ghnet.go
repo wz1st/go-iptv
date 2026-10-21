@@ -42,6 +42,30 @@ type ghRoute struct {
 	Delay  time.Duration // 探测耗时
 }
 
+// ghOutProxyDesc 描述本次出网到底有没有套代理。
+//
+// 为什么必须有它：Label 只表达"GitHub 那一跳"（直连 / gh-proxy.org），
+// 与"本机出网有没有走代理"是**两个正交的维度**。用户把 useUp 打开后，
+// 日志里只有"经 直连"，看不出代理到底有没有参与 —— 于是只能靠猜。
+// 这里把第二个维度显式写进每一条下载相关的日志。
+//
+// 三个取值：
+//   - 经出网代理 http://1.2.3.4:7890（配置里的 useUp 命中）
+//   - 经环境变量 PROXY=...（历史兼容路径）
+//   - 出网直连（都没配）
+func ghOutProxyDesc() string {
+	if u := OutProxyURLFor(ProxyUseUp); u != nil {
+		return "经出网代理 " + u.Redacted()
+	}
+	if proxyEnv := os.Getenv("PROXY"); proxyEnv != "" {
+		return "经环境变量 PROXY=" + proxyEnv
+	}
+	return "出网直连"
+}
+
+// ghVia 把"链路名 + 出网方式"拼成一句日志/回显用的短语。
+func ghVia(label string) string { return label + "（" + ghOutProxyDesc() + "）" }
+
 // ghURL 把候选前缀与原始 GitHub URL 拼成最终地址。
 func ghURL(prefix, raw string) string {
 	if prefix == "" {
@@ -127,24 +151,24 @@ func ghProbeAll(raw string) (*ghRoute, error) {
 		return &ghRoute{Prefix: "", Label: ghLabel(""), Delay: delay}, nil
 	case err == nil:
 		slowest = &ghRoute{Prefix: "", Label: ghLabel(""), Delay: delay}
-		log.Printf("GitHub 直连延迟过大(%s)，尝试国内加速", delay)
+		log.Printf("GitHub 直连延迟过大(%s)，尝试国内加速（%s）", delay, ghOutProxyDesc())
 	default:
 		lastErr = err
-		log.Printf("GitHub 直连不可用(%v)，尝试国内加速", err)
+		log.Printf("GitHub 直连不可用(%v)，尝试国内加速（%s）", err, ghOutProxyDesc())
 	}
 
 	for _, prefix := range ghMirrorPrefixes {
 		delay, err := ghProbe(prefix, raw, ghMirrorProbe)
 		if err == nil {
 			route := &ghRoute{Prefix: prefix, Label: ghLabel(prefix), Delay: delay}
-			log.Printf("GitHub 走国内加速 %s（%s）", route.Label, delay)
+			log.Printf("GitHub 走国内加速 %s（耗时 %s，%s）", route.Label, delay, ghOutProxyDesc())
 			return route, nil
 		}
 		lastErr = err
 	}
 	// 全都不通，但直连能通只是慢 —— 退回慢速直连，有总比没有强。
 	if slowest != nil {
-		log.Printf("国内加速都不可用，退回慢速直连（%s）", slowest.Delay)
+		log.Printf("国内加速都不可用，退回慢速直连（耗时 %s，%s）", slowest.Delay, ghOutProxyDesc())
 		return slowest, nil
 	}
 	return nil, fmt.Errorf("直连与 %d 个国内加速都不可用：%v", len(ghMirrorPrefixes), lastErr)
@@ -163,10 +187,18 @@ var (
 )
 
 // LastGhRoute 返回最近一次成功选路的链路名；没选过路时返回空串。
+//
+// 带出网方式（"直连（经出网代理 http://…）"）：面板上回显的正是这个串，
+// 用户开完代理开关后要能一眼看出这次到底走没走代理 —— 只回显
+// "直连 / gh-proxy.org" 的话，开没开代理完全看不出来。
 func LastGhRoute() string {
 	ghCacheMu.Lock()
-	defer ghCacheMu.Unlock()
-	return ghLast
+	last := ghLast
+	ghCacheMu.Unlock()
+	if last == "" {
+		return ""
+	}
+	return ghVia(last)
 }
 
 // ghHost 取 URL 主机，用作选路缓存的键。
@@ -253,7 +285,7 @@ func ghGetJSON(raw string) ([]byte, *ghRoute, error) {
 			err = rerr
 		}
 		lastErr = err
-		log.Printf("经 %s 拉取 release 列表失败(%v)，重新选路重试", route.Label, err)
+		log.Printf("经 %s 拉取 release 列表失败(%v)，重新选路重试", ghVia(route.Label), err)
 	}
 	return nil, nil, lastErr
 }
@@ -341,11 +373,11 @@ func ghDownloadProgress(raw, dst string, mode os.FileMode, onProgress func(done,
 			return nil, err
 		}
 		if err := ghToFileProgress(route.Prefix, raw, dst, mode, onProgress); err == nil {
-			log.Printf("下载完成：经 %s，落盘 %s", route.Label, dst)
+			log.Printf("下载完成：经 %s，落盘 %s", ghVia(route.Label), dst)
 			return route, nil
 		} else {
 			lastErr = err
-			log.Printf("经 %s 下载失败(%v)，重新选路重试", route.Label, err)
+			log.Printf("经 %s 下载失败(%v)，重新选路重试", ghVia(route.Label), err)
 		}
 		time.Sleep(time.Second * time.Duration(i+1))
 	}

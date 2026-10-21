@@ -109,6 +109,12 @@ func getUrlData(url string, purpose int, ua ...string) string {
 
 	req.Header.Set("User-Agent", useUA)
 
+	// 出网前先说清走没走代理：抓取失败时日志里只有"请求失败"一行，
+	// 分不清是"代理没生效"还是"代理生效了但源站不可达"。
+	if purpose != proxyUseNone {
+		LogProxyUse(purpose, url, true)
+	}
+
 	client := &http.Client{}
 	if purpose != proxyUseNone {
 		client.Transport = OutProxyTransport(purpose)

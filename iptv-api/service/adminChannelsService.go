@@ -120,6 +120,7 @@ func AddList(req dto.ChannelsListReq) dto.ReturnJsonDto {
 	iptvCategoryList.Dedup = req.Dedup
 
 	// 抓取走「频道源更新」这一路的代理开关（config.yml 的 out_proxy.use_src）。
+	until.LogProxyUse(until.ProxyUseSrc, url, true)
 	client := &http.Client{Transport: until.OutProxyTransport(until.ProxyUseSrc)}
 	httpReq, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -219,6 +220,7 @@ func UpdateList(req dto.ReqID) dto.ReturnJsonDto {
 	}
 
 	// 抓取走「频道源更新」这一路的代理开关（config.yml 的 out_proxy.use_src）。
+	until.LogProxyUse(until.ProxyUseSrc, iptvCategoryList.Url, true)
 	client := &http.Client{Transport: until.OutProxyTransport(until.ProxyUseSrc)}
 	httpReq, err := http.NewRequest("GET", iptvCategoryList.Url, nil)
 	if err != nil {
