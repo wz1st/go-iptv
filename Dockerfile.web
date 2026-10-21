@@ -47,8 +47,6 @@ RUN apk add --no-cache \
         libc6-compat \
         libstdc++ \
         tzdata \
- && apk info -e nginx openjdk17 ffmpeg > /dev/null \
- && echo "本层关键包自检通过（nginx/openjdk17/ffmpeg 均已安装）" \
  && cp /usr/share/zoneinfo/${TZ} /etc/localtime \
  && echo ${TZ} > /etc/timezone \
  && mkdir -p /var/log/nginx /var/lib/nginx/tmp /run \
