@@ -173,4 +173,4 @@ package until
 //	引擎实际版本判定并收成 done。
 //
 // 改动只涉及 api / 前端 ⇒ 只递增第三段，在线可升级、无需换镜像。
-var Version = "v4.8.0"
+var Version = "v4.8.1"

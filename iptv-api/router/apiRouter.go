@@ -171,9 +171,6 @@ var adminRoutes = []apiRoute{
 	{"admins/data", api.AdminsData},
 	{"admins/save", api.Admins},
 
-	// --- 关于 ---
-	{"about/data", api.AboutData},
-
 	// --- 使用说明（首次进入的引导页）---
 	{"guide/data", api.GuideData},
 	{"guide/ack", api.GuideAck},
@@ -202,8 +199,10 @@ var adminRoutes = []apiRoute{
 	{"engine/proxy", api.EngineProxy},
 	{"engine/restart", api.EngineRestart},
 	{"engine/autoRes", api.EngineAutoRes},
+	{"engine/autoResRun", api.EngineAutoResRun},
 	{"engine/disCh", api.EngineDisCh},
 	{"engine/epgFuzz", api.EngineEpgFuzz},
+	{"engine/epgFuzzRun", api.EngineEpgFuzzRun},
 	{"engine/register", api.EngineRegister},
 	{"engine/login", api.EngineLogin},
 	{"engine/changePwd", api.EngineChangePwd},

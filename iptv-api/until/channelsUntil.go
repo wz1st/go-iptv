@@ -304,17 +304,27 @@ func AddChannelList(srclist string, cId, listId int64, doRepeat bool) (int, erro
 	}
 
 	if plan.Changed() {
-		log.Printf("分组 %d 频道数据变动：新增 %d / 原地更新 %d / 删除 %d（跳过重复 %d）",
-			cId, len(plan.Insert), len(plan.Patch), len(plan.Delete), plan.Repeat)
+		log.Printf("分组 %s 频道数据变动：新增 %d / 原地更新 %d / 删除 %d（跳过重复 %d）",
+			categoryName(cId), len(plan.Insert), len(plan.Patch), len(plan.Delete), plan.Repeat)
 
 		dao.DB.Model(&models.IptvCategory{}).Where("id = ?", cId).Update("raw_count", plan.RawCount)
 
 		// 频道表变了：聚合分组的内容与 EPG 绑定都要跟着重算。
 		notifyChannelWrite(cId)
 	}
-	log.Printf("订阅频道数量: %d", plan.RawCount)
+	log.Printf("分组 %s 订阅频道数量: %d", categoryName(cId), plan.RawCount)
 
 	return plan.Repeat, nil
+}
+
+// categoryName 取分组名（日志用）。查不到就退回 "#<id>" ——
+// 日志里出现一个没名字的行，等于没写。
+func categoryName(cId int64) string {
+	var name string
+	if err := dao.DB.Model(&models.IptvCategory{}).Where("id = ?", cId).Pluck("name", &name).Error; err != nil || name == "" {
+		return fmt.Sprintf("#%d", cId)
+	}
+	return name
 }
 
 // SyncCaToEpg 把一个分组 id 挂到所有启用中的 EPG 的 cas 上（"这个 EPG 认领哪些分组"）。

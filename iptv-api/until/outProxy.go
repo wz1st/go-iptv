@@ -203,22 +203,22 @@ func proxyPurposeName(purpose int) string {
 	return "未知用途"
 }
 
-// LogProxyUse 打出"本次出网到底走没走代理"的一行。
+// LogProxyUse 记录"本次出网到底走没走代理"。
 //
-// 为什么需要它：四个作用范围开关是逐个勾的，用户勾完只能看到一行
-// 「作用范围开关已更新：useSrc=1」，**没有任何证据说明它真的生效了**。
-// 代理问题最典型的表现恰恰是"静默失效"——配错了、开关没勾上、地址不可达，
-// 界面完全正常，只有抓取悄悄失败。这里在每次真正发起出网请求前打一行，
-// 就能把"开关拨了"和"确实走了"两件事对上。
+// ★**默认不打**（quiet=true 时直接返回）：EPG 更新、频道源拉取每条频道
+// 都会走一次这里，命中代理时逐条打印能把日志刷成几百行 —— 用户反馈的
+// "重复性日志"就是它。现在只在**开关变更 / 显式确认**这类场景
+// （quiet=false）打一行；日常确认代理状态看前端的"出网描述"那条链路。
 //
-// 只在**命中代理**时打（走直连是常态，不必刷屏）；未命中时只在被显式
-// 要求时打一次（quiet=false，供开关变更/测试时确认"这个开关是关的"）。
+// 保留函数与调用点：用途编号、中文名、脱敏地址都还在，将来要恢复成
+// "只打聚合行"也只改这一处。
 func LogProxyUse(purpose int, target string, quiet bool) {
+	if quiet {
+		return
+	}
 	u := OutProxyURLFor(purpose)
 	if u == nil {
-		if !quiet {
-			log.Printf("出网代理未生效：%s（%s）", proxyPurposeName(purpose), target)
-		}
+		log.Printf("出网代理未生效：%s（%s）", proxyPurposeName(purpose), target)
 		return
 	}
 	log.Printf("出网代理已生效：%s 经 %s（%s）", proxyPurposeName(purpose), u.Redacted(), target)

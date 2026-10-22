@@ -29,7 +29,7 @@ import (
 //
 // 判据用 dao.LicStillValid()（Type>=2，或 Type==1 且未过期），与中转开关
 // 本身走的是同一把尺 —— EnforceLicenseGate 在授权失效时就是把
-// cfg.Proxy.Status 落 0，用的是它。早先这里按 Type==4（定制授权）卡，
+// cfg.Proxy.Status 落 0，用的是它。早先这里只放行某一种高阶授权类型，
 // 于是普通授权账号明明能开中转、却配不了中转的代理，界面与实际能力对不上。
 //
 // api 侧读的是引擎心跳带回来的授权快照（dao.GetLic），不自己解 license.lic。
@@ -116,8 +116,8 @@ func ProxyTest(req dto.OutProxy) dto.ReturnJsonDto {
 		p = mergeProxyConn(cfg.OutProxy, p)
 	}
 	res := until.TestOutProxy(p)
-	log.Printf("代理连通性测试：协议=%s %s:%d 结果=%v 类型=%s 阶段=%s %s",
-		p.Type, p.Host, p.Port, res.OK, res.FailType, res.Stage, res.Detail)
+	// ★不写日志：测试结论直接回前端（弹窗里显示），再往后台日志里抄一遍
+	// 只会刷屏（用户反馈的"前台可视日志"之一）。要查历史就看前端的测试记录。
 	verdict := proxyTestVerdict{OK: res.OK, FailType: res.FailType}
 	return dto.ReturnJsonDto{
 		Code: boolToCode(res.OK),

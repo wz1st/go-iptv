@@ -14,7 +14,7 @@ import (
 // ★ 口径：中转对**全部授权账号**开放，取流代理不能比中转还窄。
 // 判据取 dao.LicStillValid()（Type>=2，或 Type==1 且未过期）——
 // 与 EnforceLicenseGate 关中转开关用的是同一把尺。
-// 早先这里按 Type==4（定制授权）卡，普通授权账号明明能开中转、
+// 早先这里只放行某一种高阶授权类型，普通授权账号明明能开中转、
 // 却配不了中转的代理，界面与实际能力对不上。
 
 // withCfg 装一份全局配置，返回恢复函数。
@@ -48,8 +48,8 @@ func TestRelayAllowedCoversEveryLicensedType(t *testing.T) {
 		lic  dto.Lic
 		want bool
 	}{
-		{"定制授权", dto.Lic{Type: 4}, true},
-		{"其它高阶授权", dto.Lic{Type: 3}, true},
+		{"高阶授权 Type=4", dto.Lic{Type: 4}, true},
+		{"高阶授权 Type=3", dto.Lic{Type: 3}, true},
 		{"另一类授权", dto.Lic{Type: 2}, true},
 		{"试用授权（未到期）", dto.Lic{Type: 1, Exp: future}, true},
 		{"试用授权（已过期）", dto.Lic{Type: 1, Exp: past}, false},
