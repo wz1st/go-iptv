@@ -461,6 +461,7 @@ func BindChannel() bool {
 		go checkCaIdsInMeals(touched)
 		cfg := dao.GetConfig()
 		if cfg.Epg.Fuzz == 1 && dao.Lic.Type != 0 {
+			log.Printf("通知引擎开始执行EPG模糊匹配...")
 			dao.WS.SendWS(dao.Request{Action: "checkChEpg"})
 			CleanMealsEpgCacheAll()
 		}
