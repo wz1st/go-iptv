@@ -418,11 +418,15 @@ func stageUpdata(kind string, rel *githubRelease, assets map[string]string, sums
 	// 报成一句能直接看懂的话，而不是后面某处"文件不存在"。
 	for _, p := range pairs {
 		if assets[p[0]] == "" {
-			return false, "", fmt.Errorf("发布 %s 里没有资产 %s", rel.TagName, p[0])
+			err := fmt.Errorf("发布 %s 里没有资产 %s", rel.TagName, p[0])
+			SetUpdataFailed(kind, err.Error())
+			return false, "", err
 		}
 	}
 	if assets[sumsName] == "" {
-		return false, "", fmt.Errorf("发布 %s 里没有资产 %s", rel.TagName, sumsName)
+		err := fmt.Errorf("发布 %s 里没有资产 %s", rel.TagName, sumsName)
+		SetUpdataFailed(kind, err.Error())
+		return false, "", err
 	}
 
 	downDir := downloadDir()
@@ -552,6 +556,28 @@ func reportUpdataProgress(kind, phase string, percent int, msg string) {
 	})
 }
 
+// failUpdataFetch 收掉"下载请求已受理"这个状态。
+//
+// 为什么要收：下载请求一进来，状态就被置成 check（=进行中），前端据此显示
+// 下载遮罩与进度。若这一步失败却不收尾，状态会永远停在"进行中" ——
+// 前端的下载遮罩（认 check/fetch/verify 三个阶段）撤不掉，只能等 10 分钟
+// 后的陈旧判定兜底；用户看到的现象是"报错了但遮罩还挂着"。
+//
+// 两种结局分开处理：
+//   - "发布位里没有合格的新版本"**不是故障**（前端会显示"当前已是最新版本"，
+//     提示是 info 而不是 danger），状态回到"空闲"即可，别报成失败；
+//   - 其余是真故障，记下原因。
+func failUpdataFetch(kind string, err error) {
+	if err == nil {
+		return
+	}
+	if IsNoMatchingRelease(err) {
+		SetUpdataProgress(kind, UpdataPhaseIdle, 0, "")
+		return
+	}
+	SetUpdataFailed(kind, err.Error())
+}
+
 // DownloadAndVerifyWeb 下载「管理系统(api) + 前端(webdist)」整包到待安装区。
 // 两者随同一发布标签发布，在线升级时一起更新：
 //   - iptv_<arch> / SHA256SUMS.txt ⇒ 落地 iptv
@@ -559,14 +585,21 @@ func reportUpdataProgress(kind, phase string, percent int, msg string) {
 //
 // 缺前端整包时说明发布不完整，无法做到「api 与前端同时更新」，提示更新镜像。
 func DownloadAndVerifyWeb(arch string) (bool, string, error) {
+	// 一进来就报"正在获取升级包信息"：拉发布列表要走 GitHub API，
+	// 慢的时候好几秒。这段时间里服务端状态还是上一轮留下的 ready ——
+	// 前端据此判断"现在到底在不在下载"，没有这一句就会误判。
+	SetUpdataProgress("web", UpdataPhaseCheck, 1, "正在获取升级包信息…")
 	rel, err := latestAppRelease()
 	if err != nil {
+		failUpdataFetch("web", err)
 		logCheckErr(err)
 		return false, "", err
 	}
 	assets := assetURLs(rel)
 	if assets[frontAssetName] == "" {
-		return false, "", fmt.Errorf("发布 %s 未提供前端产物 %s，请更新镜像", rel.TagName, frontAssetName)
+		err := fmt.Errorf("发布 %s 未提供前端产物 %s，请更新镜像", rel.TagName, frontAssetName)
+		failUpdataFetch("web", err)
+		return false, "", err
 	}
 	binary := "iptv_" + arch
 	return stageUpdata("web", rel, assets, apiSumsName, [][2]string{
@@ -578,8 +611,11 @@ func DownloadAndVerifyWeb(arch string) (bool, string, error) {
 // DownloadAndVerifyEngine 下载引擎新版本到待安装区。
 // 资产：engine_<arch> / SHA256SUMSEngine.txt ⇒ 落地 engine。
 func DownloadAndVerifyEngine(arch string) (bool, string, error) {
+	// 同 DownloadAndVerifyWeb：从请求进来那一刻起状态就是真的。
+	SetUpdataProgress("engine", UpdataPhaseCheck, 1, "正在获取升级包信息…")
 	rel, err := latestEngineRelease()
 	if err != nil {
+		failUpdataFetch("engine", err)
 		logCheckErr(err)
 		return false, "", err
 	}
