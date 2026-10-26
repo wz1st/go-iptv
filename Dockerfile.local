@@ -1,0 +1,161 @@
+# ★★基镜像**钉住小版本**，不要用 `latest`（2026-10-14 调整：让 docker pull 时层变动最少）。
+#
+# 为什么这是层缓存的头号杀手：`latest` 是一个**会移动的标签**。
+# 每次 alpine 发布新版本，它指向的镜像 digest 就变了 ⇒ 从第1 层起全部重下，
+# 后面几十层（apk add 的JDK/ffmpeg、android build-tools、nginx 配置…）
+# 全部变成"新层"。表现为：明明只改了一行前端，每次 pull 都要拉几百 MB。
+#
+# 钉住小版本（如 alpine:3.20）后：只要不主动升这个 tag，基镜像 digest 不变，
+# 后面所有层都能命中本地已有内容。新版 alpine 的安全更新由**显式改这一行**
+# 来获取 —— 这是有意的：升级变成一个可审阅的决定，而不是每次构建的副作用。
+ARG ALPINE_VERSION=3.20
+FROM alpine:${ALPINE_VERSION}
+
+ENV TZ=Asia/Shanghai
+ENV ANDROID_HOME=/opt/android-sdk
+ENV ANDROID_SDK_ROOT=/opt/android-sdk
+
+WORKDIR /app
+VOLUME /config
+
+# 对外端口：80 是必须的；443 只在后台「SSL 证书」页开启时才会被 nginx 监听
+# （compose 侧要跟着加 `-p 443:443`，否则宿主机上到不了）。
+EXPOSE 80 443
+
+COPY apktool/apktool apktool/apktool.jar /usr/bin/
+COPY database /app/database
+COPY logo /app/logo
+COPY mytv /app/mytv
+
+# 换源 → 装包 → 拉 build-tools（走代理）→ 清理。
+# 顺序有讲究：换源必须**在 apk add 之前**；代理只对 curl 那一步生效。
+#
+# ★换源与下面那句自检都不能省：docker 构建网络到不了 dl-cdn（宿主机 curl 200、
+# 构建容器内 Permission denied），apk add 会报 "no such package" 但 **buildkit
+# 仍当该层成功**，产出缺 nginx/openjdk/ffmpeg 的残镜像（315MB vs 正常 693MB），
+# 容器一起来就死。此前没暴露只因该层命中过 CACHED。
+RUN sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#https://mirrors.tuna.tsinghua.edu.cn/alpine#g" /etc/apk/repositories
+RUN apk add --no-cache \
+        openjdk17 \
+        bash \
+        curl \
+        wget \
+        unzip \
+        ffmpeg \
+        sqlite \
+        nginx \
+        libc6-compat \
+        libstdc++ \
+        tzdata \
+ && cp /usr/share/zoneinfo/${TZ} /etc/localtime \
+ && echo ${TZ} > /etc/timezone \
+ && mkdir -p /var/log/nginx /var/lib/nginx/tmp /run \
+ && rm -rf /usr/lib/jvm/java-17-openjdk/jmods \
+           /usr/lib/jvm/java-17-openjdk/demo \
+           /usr/lib/jvm/java-17-openjdk/man \
+           /usr/lib/jvm/java-17-openjdk/include \
+ && curl -fsSL -o /tmp/bt.zip \
+      https://dl.google.com/android/repository/build-tools_r33.0.2-linux.zip \
+ && mkdir -p ${ANDROID_HOME}/build-tools \
+ && unzip -q /tmp/bt.zip -d /tmp/bt \
+ && mv /tmp/bt/android-13/* ${ANDROID_HOME}/build-tools/ \
+ && rm -rf /tmp/bt* \
+ && apk del unzip \
+ && rm -rf ${ANDROID_HOME}/build-tools/lld-bin \
+           ${ANDROID_HOME}/build-tools/renderscript \
+           ${ANDROID_HOME}/build-tools/aidl \
+           ${ANDROID_HOME}/build-tools/dexdump \
+           ${ANDROID_HOME}/build-tools/llvm-rs-cc \
+           ${ANDROID_HOME}/build-tools/split-select \
+           ${ANDROID_HOME}/build-tools/lld \
+           ${ANDROID_HOME}/build-tools/bcc_compat \
+           ${ANDROID_HOME}/build-tools/aarch64-linux-android-ld \
+           ${ANDROID_HOME}/build-tools/arm-linux-androideabi-ld \
+           ${ANDROID_HOME}/build-tools/i686-linux-android-ld \
+           ${ANDROID_HOME}/build-tools/mipsel-linux-android-ld \
+           ${ANDROID_HOME}/build-tools/x86_64-linux-android-ld \
+ && rm -f  ${ANDROID_HOME}/build-tools/lib64/libLLVM_android.so \
+           ${ANDROID_HOME}/build-tools/lib64/libclang_android.so \
+           ${ANDROID_HOME}/build-tools/lib64/libbcc.so \
+           ${ANDROID_HOME}/build-tools/lib64/libbcinfo.so \
+ && ln -s ${ANDROID_HOME}/build-tools/apksigner /usr/local/bin/apksigner \
+ && ln -s ${ANDROID_HOME}/build-tools/zipalign /usr/local/bin/zipalign \
+ && sed -i 's/\r$//' /usr/bin/apktool \
+ && chmod +x /usr/bin/apktool /usr/bin/apktool.jar \
+ && rm -rf ${ANDROID_HOME}/build-tools/samples \
+           ${ANDROID_HOME}/build-tools/docs \
+           ${ANDROID_HOME}/build-tools/NOTICE.txt \
+           ${ANDROID_HOME}/build-tools/source.properties.bak \
+ && find ${ANDROID_HOME}/build-tools -maxdepth 1 -type f \
+        \( -name '*.txt' -o -name '*.md' -o -name '*.html' \) -delete \
+ && rm -rf /root/.cache /tmp/* 2>/dev/null || true
+
+COPY nginx/nginx.conf /etc/nginx/nginx.conf
+COPY nginx/proxy_params.inc /etc/nginx/conf.d/proxy_params.inc
+# 站点本体：:80 与可选的 :443 两个 server 共用同一份 location 规则
+COPY nginx/site.inc /etc/nginx/conf.d/site.inc
+
+# HTTPS 的可选配置与证书放在**持久卷**里（/config/nginx、/config/cert），
+# 由后台「SSL 证书」页生成；这里预建目录只是为了首次启动时通配 include 有目录可扫。
+RUN mkdir -p /config/nginx /config/cert
+
+# ★★ 以下是"每次发布都会变"的部分，一律排在最后（2026-10-14 调整）。
+#
+# 层的失效规则是**从第一条变化的指令起，后面全部重算**。原先基包
+# （client/Client.apk、Client_lt.apk）排在 apk add 那个 200MB+ 的 RUN **之前**，
+# 而基包是随 ez-apk CI 流水线经常更新的 ⇒ 每次更新基包都会让 JDK/ffmpeg/
+# android build-tools/nginx 整层作废，pull 时要重下几百 MB。
+# 把它挪到所有重活之后，基包更新就只影响它自己那几层。
+#
+# 两套壳的编译基底：**基包是编译基底的唯一来源**，缺哪个壳的，
+# 那个壳就整条链路断掉 —— 且断得很安静：
+#   · ClientFactoryPackage/ClientLtFactoryPackage 探测不到 ⇒ 上传基包时
+#     准入校验直接报"无法读取镜像内*基包包名"；
+#   · 没上传过基包的部署方（绝大多数）编译时基底不存在 ⇒ 编译必失败。
+# 早先只 COPY 了清和壳那份，镜像里的 Client_lt.apk 是手工塞进去的，
+# 一重建镜像就没了 —— 这类"只存在于某台机器上"的状态必须落回 Dockerfile。
+COPY client/Client.apk client/Version_client client/Client_lt.apk client/Version_client_lt /app/client/
+
+# 配置与文档：ChangeLog.md 每次发布都改，所以这一组也在尾部。
+# （与基包分开的单独一层：只改 ChangeLog 时不必重传基包那几十 MB。）
+COPY config.yml README.md dictionary.txt alias.json ChangeLog.md Guide.md keystore.p12 /app/
+
+# 二进制产物。`/app/.image/{iptv,engine}` 是**启动器自愈用的镜像层副本**
+# （iptv-start/until/selfheal.go 的 ImageBackupDir）：/app 是容器可写层，
+# docker restart 抹不掉，产物被写坏或被卷里的旧包降级时靠它恢复。
+# 少拷一份会静默失去自愈能力（自愈是"拿不到副本就一律不动"，不报错）。
+#
+# ★ 三个产物**合成一层**（原先逐个 COPY 是三层，每层一次全量 manifest）。
+# 做法：多源 COPY 要求目标是**目录**，所以落盘时用最终文件名——
+# 构建上下文里给这三个文件起别名（见 .dockerignore 旁的 prepare 步骤）
+# 不现实（文件名由 build_results.sh 定死），因此这里用「临时名 + 同一层内 mv」：
+#   COPY 一层 → RUN 在同一条指令链里改名，仍只占一层。
+COPY iptv_all/iptv_amd64 engine_all/engine_amd64 start_all/start_amd64 /tmp/prod/
+
+RUN set -eu; \
+    mv /tmp/prod/iptv_amd64  /app/iptv; \
+    mv /tmp/prod/engine_amd64 /app/engine; \
+    mv /tmp/prod/start_amd64  /app/start; \
+    chmod 0755 /app/iptv /app/engine /app/start; \
+    mkdir -p /app/.image; \
+    cp /app/iptv   /app/.image/iptv; \
+    cp /app/engine /app/.image/engine; \
+    rm -rf /tmp/prod
+
+ARG APP_VERSION=""
+COPY webdist /app/web
+
+RUN set -eu; \
+    api=$(/app/iptv -version 2>/dev/null | tr -d '\r\n') || api=""; \
+    eng=$(/app/engine -version 2>/dev/null | tr -d '\r\n') || eng=""; \
+    fr=$(sed -n 's/.*name="app-version"[^>]*content="\([^"]*\)".*/\1/p' /app/web/index.html | head -n1); \
+    { echo "# 本镜像内置版本（构建时由产物自己回答），供启动器兜底"; \
+      echo "api=$api"; echo "front=$fr"; echo "engine=$eng"; } > /app/image-versions.txt; \
+    cat /app/image-versions.txt
+
+ENV GOMEMLIMIT=1GiB
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -qO- http://127.0.0.1/version >/dev/null 2>&1 || exit 1
+
+CMD ["./start"]
