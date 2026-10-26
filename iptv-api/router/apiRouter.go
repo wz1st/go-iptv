@@ -219,6 +219,8 @@ var adminRoutes = []apiRoute{
 	{"updata/run", api.Updata},
 	// 升级状态与进度：前端升级遮罩的唯一依据（刷新后靠它恢复）
 	{"updata/status", api.UpdataStatus},
+	// 登录后静默盘点各组件新版本（菜单/标签红点用，不写日志）
+	{"updata/silentCheck", api.UpdataSilentCheck},
 
 	// --- 订阅地址 ---
 	{"rss/url", api.GetRssUrl},

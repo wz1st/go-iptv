@@ -80,6 +80,13 @@ func UpdataCheckWeb() dto.ReturnJsonDto {
 	return dto.ReturnJsonDto{Code: 2, Msg: "当前已是最新版本", Type: "success"}
 }
 
+// SilentCheckUpdates 登录后静默盘点各组件是否有新版本（菜单/标签红点用）。
+// 不写 Docker 日志。Data 是 {web,engine,qh,lt,mytv} 五个布尔，true 表示该组件存在新版本。
+func SilentCheckUpdates() dto.ReturnJsonDto {
+	data := until.SilentCheckUpdates()
+	return dto.ReturnJsonDto{Code: 1, Msg: "ok", Type: "success", Data: data}
+}
+
 func UpdataCheckEngine() dto.ReturnJsonDto {
 	// 同上：先判架构，非 amd64 直接提示换镜像。
 	if err := until.CheckUpdateArch(runtime.GOARCH); err != nil {

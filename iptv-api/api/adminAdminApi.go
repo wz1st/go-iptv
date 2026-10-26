@@ -28,6 +28,11 @@ func UpdataCheckEngine(c *gin.Context) {
 	reply(c, service.UpdataCheckEngine())
 }
 
+// UpdataSilentCheck 登录后静默盘点各组件新版本，给菜单/标签红点用（不写日志）。
+func UpdataSilentCheck(c *gin.Context) {
+	reply(c, service.SilentCheckUpdates())
+}
+
 // UpdataDownWeb 下载管理系统新版本到本地待安装区。
 func UpdataDownWeb(c *gin.Context) {
 	reply(c, service.UpdataDownWeb())

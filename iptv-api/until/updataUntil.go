@@ -324,6 +324,55 @@ func CheckNewVerEngine(local string) (bool, string, error) {
 
 // 下载
 
+// SilentCheckUpdates 登录后静默盘点各组件是否有新版本，供前端在菜单/标签上挂红点。
+// 与手动「检测更新」不同：这里**不写任何 Docker 日志** —— 成功路径本来就没有日志，
+// 网络探测失败也直接当作"无更新"吞掉（不记 log、不报红），只在最坏情况下少亮一个红点，
+// 不会污染 docker logs。各组件的判定复用既有的"取远端最新发布 + 版本比较"原语，
+// 因此结果与手动检测完全一致（含跨大版本只能换镜像、基底可在线换这两种口径）。
+func SilentCheckUpdates() map[string]bool {
+	out := map[string]bool{
+		"web":    false,
+		"engine": false,
+		"qh":     false,
+		"lt":     false,
+		"mytv":   false,
+	}
+
+	// 管理系统 + 前端整包（api 与前端随同一发布标签发布，一并覆盖）。
+	if rel, err := latestAppRelease(); err == nil {
+		// isNewer 返回 up=true 即"存在更新"；第二参 err 只表达"能否在线升级
+		// （跨大版本需换镜像）"，不影响"有没有新版本"这一事实，故忽略。
+		if up, _ := isNewer(rel.TagName, GetVersion()); up {
+			out["web"] = true
+		}
+	}
+
+	// 引擎（标签带 engine- 前缀，先剥掉再比）。
+	if rel, err := latestEngineRelease(); err == nil {
+		ver := strings.TrimPrefix(rel.TagName, engineTagPrefix)
+		if up, _ := isNewer(ver, EngineVersion()); up {
+			out["engine"] = true
+		}
+	}
+
+	// 清和壳基底（client-vX.Y.Z 序列）。
+	if rel, err := LatestClientBaseRelease(); err == nil {
+		out["qh"] = BaseNewer(rel.Version, GetClientBaseVersion())
+	}
+
+	// 骆驼壳基底（luotuo-vX.Y.Z 序列）。
+	if rel, err := LatestLuotuoBaseRelease(); err == nil {
+		out["lt"] = BaseNewer(rel.Version, GetClientLtBaseVersion())
+	}
+
+	// MyTV 基底（mytv-vX.Y.Z 序列）。
+	if rel, err := LatestMytvBaseRelease(); err == nil {
+		out["mytv"] = BaseNewer(rel.Version, GetMytvVersion())
+	}
+
+	return out
+}
+
 // downloadFile 下载资产。走直连还是国内加速由 ghnet.go 决定，失败或延迟过大会自动切换。
 func downloadFile(urlStr, dst string) error {
 	return downloadFileWith(urlStr, dst, nil)
