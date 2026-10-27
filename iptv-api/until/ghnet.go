@@ -1,7 +1,10 @@
 package until
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -52,10 +55,43 @@ import (
 //
 // 记录是一份**有序列表**（按延迟升序），不只是"最快的那一个"。
 // 选中的源在实际下载时出错 ⇒ 从记录里**删掉它**，顺延到列表里的下一个。
-// 5 个全被删光 ⇒ 重新测速。
+//
+// 顺延的**范围就是这份记录**（最多 5 条）：这 5 条全失败才算"连不上 GitHub"。
+// 早先的实现只重试 2 次（拉列表）/ 3 次（下载文件），记录里明明还剩 3~4 条
+// 没试过就报了"连接Github 检查失败" —— 用户看到的是"明明有源能用却说连不上"。
+//
+// 5 条全失败 ⇒ 这批记录当下已经不灵了 ⇒ **作废它**，下次用 GitHub 时重新测速。
 //
 // 删掉而不是留着：留着一个已经证明不可用的源，下次选路又会挑中它（列表按
 // 延迟排序，它可能还在最前面），于是又失败一次 —— 白白浪费一次重试。
+//
+// ## 探针要验内容，不只看状态码
+//
+// 有的加速源对 api.github.com 的 API 地址返回 **HTTP 200 + body "ok"**
+// （实测 gh.acmsz.top）：状态码挑不出毛病，拿到的却根本不是 JSON。
+// 只看状态码的探针会把它记成"可用源"，还因为延迟低排在最前面 ——
+// 于是真去拉列表时 json 解析失败，用户看到"连接Github 检查失败"，
+// 而直连明明是好的。这类源只代理 github.com、**不代理 api.github.com**。
+//
+// 所以探针对 JSON 目标要额外看一眼 body 开头是不是 JSON；拉列表时也要
+// 再验一次（探针测的时候好、真拉的时候坏，同样会中招）。
+//
+// 资产下载（github.com）不做内容校验：产物是二进制，而且同一个源对资产
+// 可能完全正常（gh.acmsz.top 取不了 API，取资产却是一流）。
+//
+// ## 出网条件变了就重测
+//
+// 测速结果是在**某个出网条件下**测出来的。代理开关、代理协议、代理地址、
+// 代理端口 —— 任何一项变了，同一批加速源的延迟排序就完全不同了，旧记录
+// 必须作废。判据是**指纹比对**：出网条件变了（换了代理地址、拨了 useUp
+// 开关）⇒ 记录作废，下次用 GitHub 时重新测速。
+//
+// 指纹只取影响 GitHub 出网的字段：四个作用范围开关里只有 useUp 决定
+// GitHub 本体走不走代理，EPG / 频道源 / 中转那三个与 GitHub 无关，不进指纹。
+//
+// 换代理地址/端口走的是同一条指纹比对路径（指纹里含归一后的地址与端口）；
+// 拨 useUp 开关走的是显式调用 InvalidateGhSpeedRecords —— 开关变了等于
+// "GitHub 本体走不走代理"这个前提变了，指纹比对也能覆盖，但显式调用更直白。
 //
 // ## 代理只作用于 GitHub 本体
 //
@@ -276,9 +312,19 @@ func ghNetErr(err error, limit time.Duration) error {
 	return err
 }
 
+// ghJSONHost 是"期望 JSON 响应"的目标主机。
+//
+// release 列表走 API（api.github.com），资产下载走 github.com（二进制）。
+// 探针按这个区分要不要验内容：二进制产物没法用"开头是不是 ["来判断。
+const ghJSONHost = "api.github.com"
+
 // ghProbe 探测单个候选：只取 0-0 字节，量到响应头为止的耗时。
 //
 // ctx 用来在"已找出足够多的可用源"时取消还在飞的探测。
+//
+// 对 JSON 目标额外验内容：状态码正常不代表内容是 JSON（见文件头
+// "探针要验内容"）。验的方式是看 body 开头第一个非空白字符 ——
+// release 列表是数组（[），单个对象是 {。
 func ghProbe(ctx context.Context, src ghSource, raw string, limit time.Duration) (time.Duration, error) {
 	target, err := ghSourceURL(src, raw)
 	if err != nil {
@@ -296,13 +342,66 @@ func ghProbe(ctx context.Context, src ghSource, raw string, limit time.Duration)
 	if err != nil {
 		return 0, ghNetErr(err, limit)
 	}
-	resp.Body.Close()
 	delay := time.Since(start)
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		resp.Body.Close()
 		return delay, fmt.Errorf("状态码 %d", resp.StatusCode)
 	}
+	if ghHost(raw) == ghJSONHost {
+		head, err := ghPeekJSONHead(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return delay, err
+		}
+		if head != '[' {
+			return delay, fmt.Errorf("返回的不是 JSON 列表（开头是 %q）", head)
+		}
+		return delay, nil
+	}
+	resp.Body.Close()
 	return delay, nil
+}
+
+// ghPeekJSONHead 读 body 开头，返回第一个非空白字符。
+//
+// 只取开头几个字节就够判"是不是 JSON 列表"：GitHub 的 release 列表是数组（[）。
+// 不做完整解析 —— 完整解析在 ghGetJSON 那一层做，这里只挡"占位内容"
+// （实测某些加速源对 API 地址返回 200 + body "ok"）。
+func ghPeekJSONHead(r io.Reader) (byte, error) {
+	buf := make([]byte, 1)
+	for i := 0; i < 32; i++ {
+		n, err := r.Read(buf)
+		if n > 0 {
+			c := buf[0]
+			if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
+				return c, nil
+			}
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	return 0, fmt.Errorf("响应开头没有内容")
+}
+
+// ghBodyIsJSONArray 判断一批字节是不是一个**完整**的 JSON 数组。
+//
+// 为什么要求是数组而不是"像 JSON"：release 列表必须能被反序列化成
+// []githubRelease。API 报错时返回的是对象（{"message":"..."}），拿它去
+// Unmarshal 成切片会失败 —— 而那种失败发生在上层，那时已经没机会顺延
+// 下一条源了，所以必须在取回这一层就挡掉。
+//
+// 为什么还要 json.Valid：截断的数组（"[\n  {\n    \"url\""）开头也是 [，
+// 但反序列化一样会失败。半截内容比报错更危险 —— 宁可当成这条源不可用，
+// 顺延到下一条。
+func ghBodyIsJSONArray(b []byte) bool {
+	t := bytes.TrimLeft(b, " \t\r\n")
+	if len(t) == 0 || t[0] != '[' {
+		return false
+	}
+	return json.Valid(t)
 }
 
 // ghCandidates 返回全部候选：GitHub 本体 + 国内加速源。
@@ -393,12 +492,109 @@ var (
 	ghRecords = map[string][]*ghRoute{}
 	// ghRecordAt 记录各 host 的测速时刻（用于 10 分钟过期判定）。
 	ghRecordAt = map[string]time.Time{}
+	// ghSpeedFP 是最近一次测速时的**出网条件指纹**。指纹变了 ⇒ 那批测速
+	// 结论已作废（换代理地址、拨 useUp 开关都会变），必须重新测速。
+	//
+	// 出网条件对所有 host 是同一套（同一份代理配置），所以只存**一份**：
+	// 换了条件，release 列表与资产下载的记录一起作废 —— 没理由只作废一半。
+	ghSpeedFP string
 	// ghDead 记"这个 host 一个源都不可用"这个结论。测不出可用源时一次
 	// 测速要花满一轮超时，不缓存的话同一轮操作里的重试会反复重测。
 	ghDead    = map[string]time.Time{}
 	ghLast    string // 最近一次选中的链路（面板回显用）
 	ghLastLog string // 最近一次打进日志的链路名（避免同一路反复刷屏）
 )
+
+// ghOutboundFingerprint 给出当前出网条件的指纹。
+//
+// 测速结论只在**同一套出网条件**下成立：走不走代理、代理什么协议/地址/端口，
+// 换了任何一项，同一批加速源的延迟排序就完全不同了 —— 旧记录必须作废。
+//
+// 只取影响 GitHub 出网的字段：四个作用范围开关里只有 useUp 决定"GitHub 本体
+// 走不走代理"，EPG / 频道源 / 中转那三个与 GitHub 无关，**不进指纹** ——
+// 拨它们不该让 GitHub 重新测速。
+//
+// 地址/端口取**归一后的**（resolveProxyAddr），不是配置里原样填的：地址栏里
+// 粘进来的 "socks5://1.2.3.4:1081" 会覆盖端口输入框，路由实际走的是归一结果。
+//
+// 账密不直接进指纹（指纹会留在内存里，也可能被日志带出去），只取它的哈希。
+func ghOutboundFingerprint() string {
+	proxyEnv := os.Getenv("PROXY")
+	p := GetOutProxy()
+	if !OutProxyEnabled(ProxyUseUp) {
+		// 不用配置里的代理时，只有环境变量 PROXY 还会影响出网。
+		return "direct|" + proxyEnv
+	}
+	host, port := resolveProxyAddr(p)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%d|%s|%s|%s",
+		NormalizeProxyType(p.Type), host, port, p.AuthOn, p.User, p.Pwd, proxyEnv)))
+	return fmt.Sprintf("proxy|%s|%x", proxyEnv, sum[:8])
+}
+
+// ghInvalidateHostRecords 作废**某个 host** 的测速记录：下次用它时重新测速。
+//
+// 逐 host 作废，不连坐：release 列表走 api.github.com、资产下载走 github.com，
+// 两个 host 的可用源本来就不一样（jsDelivr 那三个源结构性取不到
+// api.github.com 的 API 地址）。api.github.com 的镜像全挂了，不代表
+// github.com 的镜像也挂了 —— 连坐会把还能用的那批记录一起丢掉。
+func ghInvalidateHostRecords(host string) {
+	ghCacheMu.Lock()
+	delete(ghRecords, host)
+	delete(ghRecordAt, host)
+	ghCacheMu.Unlock()
+}
+
+// ghMarkDead 记下"这个 host 现在一个源都不可用"这个结论。
+//
+// 作用是**一轮操作里的快速失败**：静默盘点要连着拉五份发布列表，每一次
+// 都重新测速一轮（8~15 秒超时）会把用户卡住五倍时间。记下这个结论后，
+// 同一轮里的后续调用直接返回错误，不白等。
+//
+// 它**不是**"永久放弃 GitHub"的判决：报告给用户的那一刻
+// （见 InvalidateGhSpeedRecords）就会被清掉 —— 用户看到"连接Github 检查失败"
+// 之后多半会去改代理/换网络，这时候必须重新测速，不能拿一个旧结论顶罪。
+func ghMarkDead(host string) {
+	ghCacheMu.Lock()
+	ghDead[host] = time.Now()
+	ghCacheMu.Unlock()
+}
+
+// ghInvalidateRecords 作废**全部** GitHub 测速记录：下次使用 GitHub 时重新测速。
+//
+// 触发时机有两个：
+//   - 出网条件变了（换了代理地址、拨了 useUp 开关）：出网条件是一套，
+//     release 列表与资产下载共用同一份代理配置，换了条件两份记录一起作废
+//     —— 没理由只作废一半。
+//   - **"连接Github 检查失败"报给用户的那一刻**：这条消息的含义就是
+//     "刚才那批源不灵了"，用户接下来多半会去改代理/换网络再试一次。
+//     这时候必须重新测速，不能让一个旧结论把后续几次尝试全挡住。
+//
+// ghDead 一并清 —— 它记的也是同一套出网条件下的结论，留着会让下一次调用
+// 直接返回错误、连测速都不做。
+//
+// ghSpeedFP 也清：指纹的意义是"这批记录是在什么条件下测出来的"，记录没了，
+// 指纹就没有归属。
+func ghInvalidateRecords() {
+	ghCacheMu.Lock()
+	ghRecords = map[string][]*ghRoute{}
+	ghRecordAt = map[string]time.Time{}
+	ghDead = map[string]time.Time{}
+	ghSpeedFP = ""
+	ghCacheMu.Unlock()
+}
+
+// InvalidateGhSpeedRecords 作废 GitHub 测速记录：下次使用 GitHub 时重新测速。
+//
+// 出网代理的作用范围开关（尤其 useUp）一变就要调 —— 之前测出来的"哪个源
+// 最快"是在旧出网条件下测的，换了条件就不再作数。
+//
+// 另外，"连接Github 检查失败"报给用户时也要调：那条消息已经告诉用户
+// "GitHub 现在连不上"，用户接下来的动作（改代理、换网络）必然改变出网
+// 条件 —— 这时候继续沿用旧测速结论，只会让后续每次尝试都对着同一批
+// 已经证明不灵的源。
+func InvalidateGhSpeedRecords() {
+	ghInvalidateRecords()
+}
 
 // LastGhRoute 返回最近一次成功选路的链路名；没选过路时返回空串。
 //
@@ -424,14 +620,30 @@ func ghHost(raw string) string {
 	return u.Host
 }
 
+// ghSpeedTestFn 指向测速实现。抽成变量是为了让单测能替换掉它 ——
+// 真去敲 GitHub 与十几个加速源，离线环境里必然全超时，而"记录过期了
+// 会不会重新测速"恰恰是要测的东西。
+var ghSpeedTestFn = ghSpeedTest
+
 // ghPick 选路。
 //
 // 优先用 10 分钟内测好的结果（记录里的第一个）；记录空了（用尽）或过期就
 // 重新测速。
+//
+// 出网条件变了（换了代理地址、拨了 useUp 开关）⇒ 旧记录作废，重新测速：
+// 之前那批延迟是另一套出网路径下量出来的，排序不再作数。
 func ghPick(raw string) (*ghRoute, error) {
 	host := ghHost(raw)
+	fp := ghOutboundFingerprint()
 
 	ghCacheMu.Lock()
+	if ghSpeedFP != fp {
+		// 出网条件变了 ⇒ 全部作废（出网条件对所有 host 是同一套）。
+		ghRecords = map[string][]*ghRoute{}
+		ghRecordAt = map[string]time.Time{}
+		ghDead = map[string]time.Time{}
+		ghSpeedFP = fp
+	}
 	if at, ok := ghDead[host]; ok && time.Since(at) < ghDeadTTL {
 		ghCacheMu.Unlock()
 		return nil, fmt.Errorf("GitHub 本体与 %d 个国内加速源都不可用", len(ghMirrorSources))
@@ -444,7 +656,7 @@ func ghPick(raw string) (*ghRoute, error) {
 		return ghUseRoute(routes[0]), nil
 	}
 
-	newRoutes, err := ghSpeedTest(raw)
+	newRoutes, err := ghSpeedTestFn(raw)
 	if err != nil {
 		ghCacheMu.Lock()
 		ghDead[host] = time.Now()
@@ -457,6 +669,60 @@ func ghPick(raw string) (*ghRoute, error) {
 	delete(ghDead, host)
 	ghCacheMu.Unlock()
 	return ghUseRoute(newRoutes[0]), nil
+}
+
+// ghHasCandidate 看这个 host 的记录里还有没有没试过的候选。
+func ghHasCandidate(host string) bool {
+	ghCacheMu.Lock()
+	defer ghCacheMu.Unlock()
+	return len(ghRecords[host]) > 0
+}
+
+// ghFailover 按**已记录的候选**顺延，直到成功或候选用尽。
+//
+// 顺延范围 = 已记录的那几条（最多 ghSpeedKeep 条）。早先的实现固定重试 2 次
+// （拉列表）/ 3 次（下载文件），记录里明明还剩几条没试过就报"连接Github
+// 检查失败" —— 用户看到的是"明明有源能用却说连不上"。
+//
+// 全部候选都失败 ⇒ 这批记录当下已经不灵 ⇒ **作废它**：下次用 GitHub 时
+// 重新测速（而不是继续用同一批已经证明不灵的源）。
+//
+// 这里**不**记 dead 结论：作废记录的目的正是"下次重新测速"，而 dead 是
+// "直接返回错误、连测速都不做" —— 两者凑在一起就把用户要的"重新测速"
+// 抵消掉了。dead 只留给"测速就没测出可用源"那种情况（见 ghPick）。
+//
+// 选路本身失败（测速就没测出可用源）是另一回事：那一刻压根没有记录，
+// 没东西可作废 —— dead 结论由 ghPick 记下，起快速失败的作用。
+//
+// retryDelay 是两次尝试之间的等待：给刚失败的源一点喘息，也避免把同一批
+// 加速源连着打。固定小值而不是递增 —— 候选只有 5 条，递增等待会白等十几秒。
+func ghFailover(raw string, retryDelay time.Duration, attempt func(*ghRoute) error) error {
+	host := ghHost(raw)
+	var lastErr error
+	for i := 0; i < ghSpeedKeep; i++ {
+		route, err := ghPick(raw)
+		if err != nil {
+			// 选路本身失败 ⇒ 没有候选可顺延，直接报错（ghDead 已缓存该结论）。
+			return err
+		}
+		if err := attempt(route); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			// 这条源不好用 ⇒ 从记录里删掉，下次挑下一条（顺延）。
+			ghMarkBad(host, route)
+		}
+		// 记录里还有候选 ⇒ 顺延下一条；用完了 ⇒ 到此为止。
+		if !ghHasCandidate(host) {
+			break
+		}
+		if retryDelay > 0 {
+			time.Sleep(retryDelay)
+		}
+	}
+	// 已记录的候选全试完了 ⇒ 这批记录当下不灵 ⇒ 作废，下次用 GitHub 时重新测速。
+	ghInvalidateHostRecords(host)
+	return lastErr
 }
 
 // ghUseRoute 记下"这次用了哪条链路"，必要时打一行日志。
@@ -521,30 +787,40 @@ func ghDo(r *ghRoute, raw string, headers map[string]string, timeout time.Durati
 	return resp, nil
 }
 
-// ghGetJSON 取 JSON（release 列表）：选中的链路请求失败就换下一条重试。
+// ghGetJSON 取 JSON（release 列表）：选中的链路请求失败就换下一条，顺延到
+// 已记录的候选全部用完才报错。
+//
+// 拿到 HTTP 200 **不等于**成功：有的加速源对 API 地址返回 200 + body "ok"
+// 这种占位内容（实测 gh.acmsz.top）。只看状态码的话，这次会被当成成功，
+// 垃圾 body 交给上层 json.Unmarshal 才炸 —— 用户看到"连接Github 检查失败"，
+// 而别的源明明是好的。所以这里额外验内容，不像 JSON 就当这条源失败，顺延下一条。
 func ghGetJSON(raw string) ([]byte, *ghRoute, error) {
 	headers := map[string]string{"Accept": "application/vnd.github.v3+json"}
-	var lastErr error
-	for i := 0; i < 2; i++ {
-		route, err := ghPick(raw)
-		if err != nil {
-			return nil, nil, err
-		}
+	var body []byte
+	var used *ghRoute
+	err := ghFailover(raw, 0, func(route *ghRoute) error {
 		resp, err := ghDo(route, raw, headers, ghJSONTimeout)
 		if err == nil {
-			body, rerr := io.ReadAll(resp.Body)
+			b, rerr := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if rerr == nil {
-				return body, route, nil
+				if !ghBodyIsJSONArray(b) {
+					err = fmt.Errorf("返回的不是 JSON 列表（%d 字节）", len(b))
+				} else {
+					body, used = b, route
+					return nil
+				}
+			} else {
+				err = rerr
 			}
-			err = rerr
 		}
-		lastErr = err
-		// 这条源不好用 ⇒ 从记录里删掉，下次挑下一条。
-		ghMarkBad(ghHost(raw), route)
 		log.Printf("经 %s 拉取 release 列表失败(%v)，换下一条链路重试", ghRouteDesc(route), err)
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
 	}
-	return nil, nil, lastErr
+	return body, used, nil
 }
 
 // ghToFile 把资产整体落盘；空结果判失败（半截文件比报错更危险）。
@@ -622,23 +898,34 @@ func ghDownload(raw, dst string, mode os.FileMode) (*ghRoute, error) {
 
 // ghDownloadProgress 是 ghDownload 的带进度版本（换链路重试时同样会回调，
 // 每次重试都从 0 重新计数 —— 前端看到百分比回落是正常的，不必当成异常）。
+//
+// verify 非 nil 时会在**每条链路下载完成后**校验落盘文件：校验不过说明这条
+// 源给的是假内容（实测某些加速源对资产地址也返回占位内容），当这条源失败，
+// 顺延到下一条 —— 而不是直接判"校验失败"终止整个升级。
 func ghDownloadProgress(raw, dst string, mode os.FileMode, onProgress func(done, total int64)) (*ghRoute, error) {
-	var lastErr error
-	for i := 0; i < 3; i++ {
-		route, err := ghPick(raw)
-		if err != nil {
-			return nil, err
-		}
-		if err := ghToFileProgress(route, raw, dst, mode, onProgress); err == nil {
-			log.Printf("下载完成：经 %s，落盘 %s", ghRouteDesc(route), dst)
-			return route, nil
-		} else {
-			lastErr = err
-			// 这条源不好用 ⇒ 从记录里删掉，下次挑下一条（顺延）。
-			ghMarkBad(ghHost(raw), route)
+	return ghDownloadVerified(raw, dst, mode, onProgress, nil)
+}
+
+// ghDownloadVerified 是 ghDownloadProgress 带内容校验的版本。
+func ghDownloadVerified(raw, dst string, mode os.FileMode, onProgress func(done, total int64), verify func(path string) error) (*ghRoute, error) {
+	var used *ghRoute
+	err := ghFailover(raw, time.Second, func(route *ghRoute) error {
+		if err := ghToFileProgress(route, raw, dst, mode, onProgress); err != nil {
 			log.Printf("经 %s 下载失败(%v)，换下一条链路重试", ghRouteDesc(route), err)
+			return err
 		}
-		time.Sleep(time.Second * time.Duration(i+1))
+		if verify != nil {
+			if err := verify(dst); err != nil {
+				log.Printf("经 %s 下载的内容校验失败(%v)，换下一条链路重试", ghRouteDesc(route), err)
+				return err
+			}
+		}
+		used = route
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil, lastErr
+	log.Printf("下载完成：经 %s，落盘 %s", ghRouteDesc(used), dst)
+	return used, nil
 }

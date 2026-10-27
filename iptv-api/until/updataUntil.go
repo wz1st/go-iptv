@@ -294,6 +294,10 @@ func CheckNewVerWebAndFront(local string) (bool, string, bool, error) {
 		return false, "", false, nil
 	}
 	if err != nil {
+		// 把"连接Github 检查失败"报给用户 ⇒ 作废测速记录：这条消息的含义
+		// 就是"刚才那批源不灵了"，用户接下来多半会改代理/换网络再试一次，
+		// 这时必须重新测速，不能让旧结论把后续尝试全挡住。
+		InvalidateGhSpeedRecords()
 		log.Println("连接Github 检查失败，请检查网络连接")
 		return false, "", false, fmt.Errorf("连接Github 检查失败，请检查网络连接")
 	}
@@ -314,6 +318,7 @@ func CheckNewVerEngine(local string) (bool, string, error) {
 		return false, "", nil
 	}
 	if err != nil {
+		InvalidateGhSpeedRecords()
 		log.Println("连接Github 检查失败，请检查网络连接")
 		return false, "", fmt.Errorf("连接Github 检查失败，请检查网络连接")
 	}
@@ -509,13 +514,30 @@ func stageUpdata(kind string, rel *githubRelease, assets map[string]string, sums
 	SetUpdataProgress(kind, UpdataPhaseFetch, 2, "正在获取升级包信息…")
 
 	localSums := filepath.Join(downDir, sumsName)
-	if err := downloadFile(assets[sumsName], localSums); err != nil {
+	// 清单也要验内容：清单本身是文本资产，假源会给占位内容（实测有加速源
+	// 返回 200 + body "ok"）。清单缺项 ⇒ 后面每个资产的校验都会失败 ⇒
+	// 与其那时才报"校验失败"，不如现在就换下一条链路重下。
+	verifySums := func(path string) error {
+		got := loadSums(path)
+		for _, p := range pairs {
+			if got[p[0]] == "" {
+				return fmt.Errorf("清单里没有 %s", p[0])
+			}
+		}
+		return nil
+	}
+	if _, err := ghDownloadVerified(assets[sumsName], localSums, 0644, nil, verifySums); err != nil {
 		SetUpdataFailed(kind, "获取校验清单失败："+err.Error())
 		return false, "", err
 	}
 	sums := loadSums(localSums)
 
 	// 逐项下载 + 校验（先全部下完再落地，坏一个不污染待安装区）。
+	//
+	// 校验**放在下载内部**：下载与校验是一体的 —— 某条链路给的资产哈希对不上，
+	// 说明这条源给的是假内容（实测有些加速源会返回占位内容），该换下一条链路
+	// 重下，而不是直接终止整个升级。之前校验在下载外面，假内容一出现就报
+	// "校验失败"，用户看到的是"升级失败"，而其实换条路就好。
 	for i, p := range pairs {
 		local := filepath.Join(downDir, p[0])
 		base := 8 + (80*i)/len(pairs)
@@ -534,15 +556,17 @@ func stageUpdata(kind string, rel *githubRelease, assets map[string]string, sums
 			}
 			reportUpdataProgress(kind, UpdataPhaseFetch, pct, "正在下载 "+label+"…")
 		}
-		if err := downloadFileWith(assets[p[0]], local, onProgress); err != nil {
+		verify := func(path string) error {
+			if !verifySHA(path, sums) {
+				return fmt.Errorf("%s 哈希不匹配", filepath.Base(path))
+			}
+			return nil
+		}
+		if _, err := ghDownloadVerified(assets[p[0]], local, 0644, onProgress, verify); err != nil {
 			SetUpdataFailed(kind, "下载 "+label+" 失败："+err.Error())
 			return false, "", err
 		}
 		SetUpdataProgress(kind, UpdataPhaseVerify, base+span, "正在校验 "+label+"…")
-		if !verifySHA(local, sums) {
-			SetUpdataFailed(kind, label+" 校验失败")
-			return false, "", fmt.Errorf("%s 校验失败", p[0])
-		}
 	}
 
 	// 先删旧再落新：旧文件在时启动器可能读到半新半旧的组合。
@@ -678,6 +702,8 @@ func DownloadAndVerifyEngine(arch string) (bool, string, error) {
 // 会把人往错的方向带。
 func logCheckErr(err error) {
 	if !errors.Is(err, errNoMatchingRelease) {
+		// 同上：报"连不上"给用户 ⇒ 作废测速记录，下次重新测速。
+		InvalidateGhSpeedRecords()
 		log.Println("连接Github 检查失败，请检查网络连接")
 	}
 }

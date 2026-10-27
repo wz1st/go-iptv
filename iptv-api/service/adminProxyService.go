@@ -297,6 +297,15 @@ func ProxyScope(req dto.OutProxyScopeDto) dto.ReturnJsonDto {
 	set(&cfg.OutProxy, req.Value)
 	dao.SetConfig(cfg)
 	log.Printf("作用范围开关已更新：%s=%d", req.Key, req.Value)
+	// 拨了 useUp ⇒ GitHub 出网路径变了（直连 ↔ 代理）⇒ 之前测出来的
+	// "哪个加速源最快"是在旧路径下量出来的，排序不再作数 ⇒ 作废测速记录，
+	// 下次用 GitHub 时重新测速。
+	//
+	// 只拨 useUp 才作废：useEpg / useSrc / useRelay 与 GitHub 出网无关，
+	// 拨它们不该让 GitHub 重新测速。
+	if req.Key == "useUp" {
+		until.InvalidateGhSpeedRecords()
+	}
 	// 拨完开关立刻说清"这一路现在到底走没走代理"。四个开关都是**即时生效**
 	// 的（api 侧每次出网都重读配置），但"即时生效"不等于"用户看得见" ——
 	// 中转那一路还要经引擎 ApplyRelayProxy 换上 Transport，光有一行
