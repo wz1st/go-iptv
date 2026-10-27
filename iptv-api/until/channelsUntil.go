@@ -8,7 +8,6 @@ import (
 	"iptv-api/models"
 	"log"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -368,10 +367,10 @@ func upperChannelName(name string) string {
 	return strings.ToUpper(name)
 }
 
-func GetTxt(id int64, base string) string {
+func EnsureMealSubTxt(id int64, base string) string {
 	var res string
 
-	txtCaCheKey := "rssMealTxt_" + strconv.FormatInt(id, 10)
+	txtCaCheKey := mealSubTxtKey(id)
 	if dao.Cache.Exists(txtCaCheKey) {
 		cacheData, err := dao.Cache.GetNotExpired(txtCaCheKey)
 		if err == nil {
@@ -422,10 +421,10 @@ func GetTxt(id int64, base string) string {
 	return res
 }
 
-func GetTxtKu9(id int64, base string) string {
+func EnsureMealSubTxtKu9(id int64, base string) string {
 	var res string
 
-	txtCaCheKey := "rssMealTxt_" + strconv.FormatInt(id, 10)
+	txtCaCheKey := mealSubTxtKey(id)
 	if dao.Cache.Exists(txtCaCheKey) {
 		cacheData, err := dao.Cache.GetNotExpired(txtCaCheKey)
 		if err == nil {
@@ -501,9 +500,9 @@ func GetTxtKu9(id int64, base string) string {
 	return res
 }
 
-func GetM3u8(id int64, host, token string) string {
+func EnsureMealSubM3u8(id int64, host, token string) string {
 
-	m3u8CaCheKey := "rssMealM3u8_" + strconv.FormatInt(id, 10)
+	m3u8CaCheKey := mealSubM3u8Key(id)
 	if dao.Cache.Exists(m3u8CaCheKey) {
 		cacheData, err := dao.Cache.GetNotExpired(m3u8CaCheKey)
 		if err == nil {
@@ -572,9 +571,9 @@ func GetM3u8(id int64, host, token string) string {
 	return builder.String()
 }
 
-func MytvM3u8(id int64, deviceId, host string) string {
+func EnsureMytvSubM3u8(id int64, deviceId, host string) string {
 
-	m3u8CaCheKey := "mytvMealM3u8_" + deviceId
+	m3u8CaCheKey := mytvSubM3u8Key(deviceId)
 	if dao.Cache.Exists(m3u8CaCheKey) {
 		cacheData, err := dao.Cache.GetNotExpired(m3u8CaCheKey)
 		if err == nil {

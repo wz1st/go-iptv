@@ -482,7 +482,10 @@ func CheckUserDb(user dto.ApkUser, ip string) models.IptvUser {
 
 	dbUser.LastTime = time.Now().Unix()
 	dbUser.IP = ip
-	dbUser.Region = until.GetIpRegion(user.IP)
+	// 归属地必须按**服务端看到的真实来源 IP** 算（ip 入参 = c.ClientIP()），
+	// 不能用客户端上报的 user.IP —— 那字段可伪造/可为空，
+	// 结果就是设备管理里公网 IP 全被标成「局域网」。
+	dbUser.Region = until.GetIpRegion(ip)
 	dbUser.NetType = user.NetType
 	dbUser.DeviceID = user.DeviceID
 

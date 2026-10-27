@@ -3,7 +3,6 @@ package until
 import (
 	"crypto/md5"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -132,50 +131,6 @@ func getUrlData(url string, purpose int, ua ...string) string {
 	}
 
 	return string(body)
-}
-
-func GetIpRegion(ip string) string {
-	city := "局域网"
-	if !isPrivateIP(net.ParseIP(ip)) {
-		return city
-	}
-	url := "https://api.mir6.com/api/ip_json?ip=" + ip
-	jsonStr := GetUrlData(url)
-	var jsonMap map[string]interface{}
-	err := json.Unmarshal([]byte(jsonStr), &jsonMap)
-	if err != nil {
-		return city
-	}
-	if data, ok := jsonMap["data"].(map[string]interface{}); ok {
-		if cityStr, ok := data["location"].(string); ok && cityStr != "" {
-			city = cityStr
-		}
-	}
-	return city
-}
-
-func isPrivateIP(ip net.IP) bool {
-	privateIPBlocks := []*net.IPNet{
-		{
-			IP:   net.IPv4(10, 0, 0, 0),
-			Mask: net.CIDRMask(8, 32),
-		},
-		{
-			IP:   net.IPv4(172, 16, 0, 0),
-			Mask: net.CIDRMask(12, 32),
-		},
-		{
-			IP:   net.IPv4(192, 168, 0, 0),
-			Mask: net.CIDRMask(16, 32),
-		},
-	}
-
-	for _, block := range privateIPBlocks {
-		if block.Contains(ip) {
-			return true
-		}
-	}
-	return false
 }
 
 func DecodeUnicode(s string) string {

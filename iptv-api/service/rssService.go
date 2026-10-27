@@ -120,9 +120,9 @@ func GetRss(token, host, t string) string {
 	}
 	if t == "t" {
 		// txt 订阅里也带 purl（分组开了中转时），所以 base 同样要传下去
-		return until.GetTxt(aesData.I, host)
+		return until.EnsureMealSubTxt(aesData.I, host)
 	} else {
-		return until.GetM3u8(aesData.I, host, token)
+		return until.EnsureMealSubM3u8(aesData.I, host, token)
 	}
 }
 
@@ -136,19 +136,23 @@ func GetTxtKu9(token, host string) string {
 	if err != nil {
 		return "订阅失败，token读取错误"
 	}
-	return until.GetTxtKu9(aesData.I, host)
+	return until.EnsureMealSubTxtKu9(aesData.I, host)
 }
 
-// GetRssEpg 返回该订阅所属套餐的「聚合节目单缓存文件路径」，由 handler 流式直发。
-func GetRssEpg(token string) (string, bool) {
+// GetRssEpg 返回该订阅所属套餐的聚合节目单。
+//
+// 返回三重：缓存文件路径（可流式直发）+ 回落内容 + 是否可用。
+// 缓存不可用/写失败时，path 为空但 body 仍有内容（现场算的），
+// handler 必须优先发 body，绝不能发空节目单。
+func GetRssEpg(token string) (string, []byte, bool) {
 	aes := until.NewChaCha20(string(until.RssKey))
 	jsonStr, err := aes.Decrypt(token)
 	if err != nil {
-		return "", false
+		return "", nil, false
 	}
 	aesData, err := getAesType(jsonStr)
 	if err != nil {
-		return "", false
+		return "", nil, false
 	}
-	return until.GetEpgPath(aesData.I)
+	return until.EnsureMealEpgPayload(aesData.I)
 }

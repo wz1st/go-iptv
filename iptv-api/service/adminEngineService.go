@@ -29,7 +29,7 @@ func Proxy(req dto.EngineProxyReq) dto.ReturnJsonDto {
 
 		dao.SetConfig(cfg)
 		dao.WS.SendWS(dao.Request{Action: "stopProxy"})
-		go until.CleanAutoCacheAll() // 订阅里带 purl，开关一变缓存就得作废
+		go until.InvalidateAutoCategoryCaches() // 订阅里带 purl，开关一变缓存就得作废
 		return dto.ReturnJsonDto{Code: 1, Msg: "已关闭中转", Type: "success"}
 	}
 
@@ -63,7 +63,7 @@ func Proxy(req dto.EngineProxyReq) dto.ReturnJsonDto {
 
 	cfg.Proxy.Status = 1
 	dao.SetConfig(cfg)
-	go until.CleanAutoCacheAll() // purl 变了，订阅缓存必须作废
+	go until.InvalidateAutoCategoryCaches() // purl 变了，订阅缓存必须作废
 	return dto.ReturnJsonDto{Code: 1, Msg: "启动成功，可以到频道分组管理中开启中转啦", Type: "success"}
 }
 
@@ -151,7 +151,8 @@ func AutoResRun() dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "启动失败: " + res.Msg, Type: "danger"}
 	}
 	// 分辨率识别会改写频道数据，套餐聚合节目单必须作废
-	go until.CleanMealsEpgCacheAll()
+	// （这里不再触发测速：测速就是本函数发起的，重复触发没有意义）。
+	go until.InvalidateAllMealEpgCachesAndRebuild()
 	return dto.ReturnJsonDto{
 		Code: 1,
 		Msg:  "已开始执行全量分辨率与延迟识别，引擎会按当前剩余 CPU/内存自动调整在测数量",
@@ -176,7 +177,9 @@ func EpgFuzzRun() dto.ReturnJsonDto {
 	if res.Code != 1 {
 		return dto.ReturnJsonDto{Code: 0, Msg: "执行失败: " + res.Msg, Type: "danger"}
 	}
-	until.CleanMealsEpgCacheAll()
+	// 模糊匹配会重写"频道 → EPG"绑定关系，影响面无法收敛到某几个分组
+	// ⇒ 走全量收尾：重算绑定 + 作废全部套餐节目单。
+	until.RequestChannelRefresh()
 	return dto.ReturnJsonDto{Code: 1, Msg: "已开始执行 EPG 模糊识别", Type: "success"}
 }
 
@@ -237,7 +240,7 @@ func EnforceLicenseGate() bool {
 	if _, err := dao.WS.SendWS(dao.Request{Action: "stopProxy"}); err != nil {
 		log.Println("⚠️ 授权失效，通知引擎停止中转失败:", err)
 	}
-	go until.CleanAutoCacheAll() // 中转关了，带 purl 的订阅缓存要作废
+	go until.InvalidateAutoCategoryCaches() // 中转关了，带 purl 的订阅缓存要作废
 
 	log.Println("🔒 授权已失效，已关闭全部进阶功能开关")
 	return true

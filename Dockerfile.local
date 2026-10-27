@@ -90,6 +90,13 @@ RUN apk add --no-cache \
         \( -name '*.txt' -o -name '*.md' -o -name '*.html' \) -delete \
  && rm -rf /root/.cache /tmp/* 2>/dev/null || true
 
+# ★完整性自检（必须单独一层，不能并进上面那条）：
+# 上面那条末尾是 `|| true`，任何失败都被吞掉；而 apk 源不可达时 buildkit
+# **不认为** apk add 失败，只是把 nginx/openjdk/ffmpeg 全装不上，
+# 照样产出"构建成功"的残镜像（315MB vs 正常 693MB），容器一起来就死。
+# 这里显式判死：装不上就在构建期失败，绝不把残镜像放出去。
+RUN apk info -e nginx openjdk17 ffmpeg
+
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
 COPY nginx/proxy_params.inc /etc/nginx/conf.d/proxy_params.inc
 # 站点本体：:80 与可选的 :443 两个 server 共用同一份 location 规则

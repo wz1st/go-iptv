@@ -43,8 +43,8 @@ func MytvGetRssEpg(c *gin.Context) {
 		return
 	}
 
-	path, ok := service.MytvGetRssEpg(deviceId)
-	serveEpgFile(c, path, ok)
+	path, body, ok := service.MytvGetRssEpg(deviceId)
+	serveEpgFile(c, path, body, ok)
 }
 
 func MytvReleases(c *gin.Context) {
@@ -63,11 +63,14 @@ func getQingh() string {
 }
 
 // serveXmlFile 把一个 XML 文件**流式**发给客户端。
-func serveXmlFile(c *gin.Context, path string) {
+//
+// fallback 是"文件读不动时的兜底内容"：缓存文件可能已被清掉/被截断，
+// 这时宁可发一份现场算出来的，也不能发空节目单。
+func serveXmlFile(c *gin.Context, path string, fallback []byte) {
 	f, err := os.Open(path)
 	if err != nil {
 		log.Printf("读取节目单缓存失败: %v", err)
-		c.Data(200, "text/xml", []byte(xml.Header+getQingh()))
+		serveEpgFallback(c, fallback)
 		return
 	}
 	defer f.Close()
@@ -75,7 +78,7 @@ func serveXmlFile(c *gin.Context, path string) {
 	info, err := f.Stat()
 	if err != nil {
 		log.Printf("读取节目单缓存属性失败: %v", err)
-		c.Data(200, "text/xml", []byte(xml.Header+getQingh()))
+		serveEpgFallback(c, fallback)
 		return
 	}
 
@@ -85,13 +88,30 @@ func serveXmlFile(c *gin.Context, path string) {
 	http.ServeContent(c.Writer, c.Request, "e.xml", info.ModTime(), f)
 }
 
-// serveEpgFile 是"有路径就流式发、没有就发一份空节目单"的便捷包装。
-func serveEpgFile(c *gin.Context, path string, ok bool) {
-	if !ok || path == "" {
+// serveEpgFallback 发出兜底节目单：有内容就发内容，没内容才发空壳。
+func serveEpgFallback(c *gin.Context, body []byte) {
+	if len(body) > 0 {
+		c.Header("Content-Type", "text/xml; charset=utf-8")
+		c.Data(200, "text/xml; charset=utf-8", body)
+		return
+	}
+	c.Data(200, "text/xml", []byte(xml.Header+getQingh()))
+}
+
+// serveEpgFile 是"有路径就流式发、没有就发兜底内容"的便捷包装。
+//
+// ok=false ⇒ 这个套餐本来就没有节目单（不是缓存故障）。
+// ok=true 但 path 为空 ⇒ 缓存不可用，body 里是现场算出来的内容。
+func serveEpgFile(c *gin.Context, path string, body []byte, ok bool) {
+	if !ok {
 		c.Data(200, "text/xml", []byte(xml.Header+getQingh()))
 		return
 	}
-	serveXmlFile(c, path)
+	if path == "" {
+		serveEpgFallback(c, body)
+		return
+	}
+	serveXmlFile(c, path, body)
 }
 
 // 这里曾有 BaseApk / BaseVersion 两个公开端点（GET /mytv/baseApk、/mytv/baseVersion），

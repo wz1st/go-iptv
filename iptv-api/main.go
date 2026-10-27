@@ -79,7 +79,6 @@ func main() {
 		until.Exists("/config/config.yml") &&
 		until.Exists("/config/install.lock"))
 
-	log.Println("初始化EPG缓存...")
 	cache, err := dao.NewFileCache("/tmp/cache/", true)
 	if err != nil {
 		log.Println("初始化缓存失败:", err)

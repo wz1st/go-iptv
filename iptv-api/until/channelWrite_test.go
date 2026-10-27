@@ -555,14 +555,14 @@ func TestRequestChannelRefreshMergesBurst(t *testing.T) {
 	var rounds int64
 	done := make(chan struct{}, 8)
 	channelRefreshClean = func() {}
-	channelRefreshEpg = func() {}
-	channelRefreshBind = func() bool {
-		n := atomic.AddInt64(&rounds, 1)
+	channelRefreshEpg = func([]int64) []int64 { return nil }
+	channelRefreshBind = func() []int64 {
+		atomic.AddInt64(&rounds, 1)
 		select {
 		case done <- struct{}{}:
 		default:
 		}
-		return n > 0
+		return nil
 	}
 
 	// 一轮"自动更新"按 #genre# 拆出几十个分组，每个分组结束时都会请求一次
@@ -603,14 +603,14 @@ func TestRequestChannelRefreshRunsAgainWhenDirty(t *testing.T) {
 	release := make(chan struct{})
 	first := make(chan struct{})
 	channelRefreshClean = func() {}
-	channelRefreshEpg = func() {}
-	channelRefreshBind = func() bool {
+	channelRefreshEpg = func([]int64) []int64 { return nil }
+	channelRefreshBind = func() []int64 {
 		n := atomic.AddInt64(&rounds, 1)
 		if n == 1 {
 			close(first)
 			<-release // 卡住第一轮，模拟"全表重绑要跑一会儿"
 		}
-		return true
+		return nil
 	}
 
 	RequestChannelRefresh()
@@ -638,17 +638,22 @@ func TestRequestChannelRefreshRunsAgainWhenDirty(t *testing.T) {
 	}
 }
 
-// 收尾必须是「失效聚合缓存 → 重算绑定 → 重算套餐聚合节目单」这三步，且顺序不能换。
+// 收尾必须是「失效聚合缓存 → 重算绑定 → 作废套餐缓存 → 重建」这四步，且顺序不能换。
+//
+// 特别要盯住"重算绑定"必须在"作废套餐缓存"之前：
+// 反了就等于拿旧绑定去重算节目单，用户看到的还是老内容。
 func TestRequestChannelRefreshOrderCleanBindEpg(t *testing.T) {
 	oldDelay := channelRefreshDelay
 	oldClean := channelRefreshClean
 	oldBind := channelRefreshBind
 	oldEpg := channelRefreshEpg
+	oldBuild := channelRefreshBuild
 	t.Cleanup(func() {
 		channelRefreshDelay = oldDelay
 		channelRefreshClean = oldClean
 		channelRefreshBind = oldBind
 		channelRefreshEpg = oldEpg
+		channelRefreshBuild = oldBuild
 	})
 
 	channelRefreshDelay = 10 * time.Millisecond
@@ -656,21 +661,27 @@ func TestRequestChannelRefreshOrderCleanBindEpg(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
 	done := make(chan struct{}, 8)
-	// 三步都记录进 order，并在最后一步（epg）结束后通知观察者。
+	// 各步都记录进 order，并在最后一步（build）结束后通知观察者。
 	channelRefreshClean = func() {
 		mu.Lock()
 		order = append(order, "clean")
 		mu.Unlock()
 	}
-	channelRefreshBind = func() bool {
+	channelRefreshBind = func() []int64 {
 		mu.Lock()
 		order = append(order, "bind")
 		mu.Unlock()
-		return true
+		return nil
 	}
-	channelRefreshEpg = func() {
+	channelRefreshEpg = func([]int64) []int64 {
 		mu.Lock()
 		order = append(order, "epg")
+		mu.Unlock()
+		return nil
+	}
+	channelRefreshBuild = func([]int64) {
+		mu.Lock()
+		order = append(order, "build")
 		mu.Unlock()
 		select {
 		case done <- struct{}{}:
@@ -678,7 +689,8 @@ func TestRequestChannelRefreshOrderCleanBindEpg(t *testing.T) {
 		}
 	}
 
-	RequestChannelRefresh()
+	// 用"限定分组"的局部语义，才能走到 channelRefreshEpg 那一步。
+	RequestChannelRefreshFor(7)
 
 	select {
 	case <-done:
@@ -691,13 +703,13 @@ func TestRequestChannelRefreshOrderCleanBindEpg(t *testing.T) {
 	got := append([]string(nil), order...)
 	mu.Unlock()
 
-	if len(got) != 3 {
-		t.Fatalf("一轮收尾应恰好跑三步（clean/bind/epg），实际 %d 步: %v", len(got), got)
+	want := []string{"clean", "bind", "epg", "build"}
+	if len(got) != len(want) {
+		t.Fatalf("一轮收尾应恰好跑四步 %v，实际 %d 步: %v", want, len(got), got)
 	}
-	want := []string{"clean", "bind", "epg"}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("收尾顺序应为 %v，实际 %v（第三步必须排在绑定之后，否则等于拿旧绑定重算节目单）", want, got)
+			t.Fatalf("收尾顺序应为 %v，实际 %v（重算绑定必须排在作废套餐缓存之前，否则等于拿旧绑定重算节目单）", want, got)
 		}
 	}
 }
