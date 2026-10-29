@@ -415,8 +415,9 @@ func mealIdsReferencingCategories(caIds []int64) []int64 {
 	}
 	var meals []models.IptvMeals
 	if err := dao.DB.Model(&models.IptvMeals{}).
-		Where("status = 1 AND ("+strings.Join(conds, " OR ")+")").
+		Where("status = 1 AND ("+strings.Join(conds, " OR ")+")", args...).
 		Pluck("id", &meals).Error; err != nil {
+		log.Printf("⚠️ 反查分组引用的套餐失败: %v", err)
 		return nil
 	}
 	ids := make([]int64, 0, len(meals))

@@ -37,4 +37,10 @@ package until
 // 后端据此返回 https:// 地址（APK 取流/下载不再拿到 http 明文地址而失败）；
 // 「80 强制跳转 HTTPS」在请求已带 X-Forwarded-Proto: https 时**不再跳转**，
 // 避免与反代自身的跳转形成环路。站点的直连与"自己开 HTTPS"两种老场景行为完全不变。
-var Version = "v4.10.3-custom.1"
+// v4.10.3-custom.2（分组↔套餐反查缺陷修复，只动 api ⇒ 只递增第三段）：
+// mealIdsReferencingCategories 拼了带 ? 的 SQL 却没把参数传给 Where()，
+// 驱动收到没有绑定的占位符就报 "missing argument with index 1"，
+// 该函数恒返回 nil ⇒「改了分组/排序后作废对应套餐的订阅与 EPG 缓存」
+// 这条链路整条静默失效（用户看到的却是刷屏的错误日志）。
+// 修法：把参数传进去，并在失败时打日志（别再静默）。
+var Version = "v4.10.3-custom.2"
