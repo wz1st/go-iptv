@@ -314,6 +314,13 @@ func EpgsData(c *gin.Context) {
 			}
 		}
 		pageData.Epgs[k].FromName = strings.TrimRight(pageData.Epgs[k].FromName, ",")
+
+		// 「绑定频道」那一列显示的是 content —— 这里把**手动绑定名单**
+		// 与**自动绑定的结果清单**合并后返回，前端不用改。
+		// 两个来源分开存（content / bound_names）是为了判定不受自动结果影响，
+		// 但展示时用户要看到的是"这个 EPG 当前绑着哪些台"的完整清单。
+		pageData.Epgs[k].Content = until.MergeBoundChannelNames(
+			pageData.Epgs[k].Content, pageData.Epgs[k].BoundNames)
 	}
 
 	c.JSON(200, pageData)

@@ -59,8 +59,8 @@ func TestBindIndexManualBeatsExactName(t *testing.T) {
 	// EPG1 的名字就是 CCTV1（exact），EPG2 的名字是 CCTV1HD，
 	// 但 EPG2 的 content 里明确写着 CCTV1（manual）。
 	epgs := []models.IptvEpg{
-		{ID: 1, Name: "CCTV1", Cas: "5", Remarks: "CCTV1"},
-		{ID: 2, Name: "CCTV1HD", Cas: "5", Remarks: "CCTV1HD", Content: "CCTV1"},
+		{ID: 1, Name: "CCTV1", Remarks: "CCTV1"},
+		{ID: 2, Name: "CCTV1HD", Remarks: "CCTV1HD", Content: "CCTV1"},
 	}
 	if got := buildBindIndex(epgs).resolve("CCTV1"); got != 2 {
 		t.Fatalf("resolve = %d，期望 2（content 里的显式绑定优先于名字匹配）", got)
@@ -77,7 +77,7 @@ func TestBindIndexAliasMatchesWritingVariants(t *testing.T) {
 	// remarks 是自动生成的别名列表，形如 "CCTV1|CCTV-1|CCTV1 4K|CCTV1 HD"。
 	// 归一化之后，播放列表里的 "cctv-1" / "ＣＣＴＶ１" 都应该认得出来。
 	epgs := []models.IptvEpg{
-		{ID: 1, Name: "cctv1", Cas: "5", Remarks: "CCTV1|CCTV-1|CCTV1 4K|CCTV1 HD"},
+		{ID: 1, Name: "cctv1", Remarks: "CCTV1|CCTV-1|CCTV1 4K|CCTV1 HD"},
 	}
 	bi := buildBindIndex(epgs)
 
@@ -98,11 +98,11 @@ func TestBindIndexAliasMatchesWritingVariants(t *testing.T) {
 // TestResolveIgnoresCategoryClaim 守住本次改动的核心：绑定判定**不再受 caID 限制**。
 //
 // 以前 resolve(caID, name) 要求 EPG 认领该分组（cas 命中），认领了就绑不上。
-// 现在判定只看频道名与规则表 —— 分组归属不再参与。
+// 现在判定只看频道名与规则表 —— 分组归属不再参与（cas 字段已整体删除）。
 func TestResolveIgnoresCategoryClaim(t *testing.T) {
 	epgs := []models.IptvEpg{
-		{ID: 1, Name: "CCTV1", Cas: "5", Remarks: "CCTV1"},
-		{ID: 2, Name: "CCTV1", Cas: "7", Remarks: "CCTV1"},
+		{ID: 1, Name: "CCTV1", Remarks: "CCTV1"},
+		{ID: 2, Name: "CCTV1", Remarks: "CCTV1"},
 	}
 	bi := buildBindIndex(epgs)
 
@@ -111,11 +111,11 @@ func TestResolveIgnoresCategoryClaim(t *testing.T) {
 		t.Fatalf("resolve = %d，期望 1（同名取 ID 最小者）", got)
 	}
 
-	// 分组不同不再导致"绑不上"：只有 EPG2 认领的分组，频道名照样绑到 EPG2。
-	only7 := []models.IptvEpg{
-		{ID: 2, Name: "湖南卫视", Cas: "7", Remarks: "湖南卫视"},
+	// 只有一条规则时照样绑得上（分组概念已不存在）。
+	only := []models.IptvEpg{
+		{ID: 2, Name: "湖南卫视", Remarks: "湖南卫视"},
 	}
-	if got := buildBindIndex(only7).resolve("湖南卫视"); got != 2 {
+	if got := buildBindIndex(only).resolve("湖南卫视"); got != 2 {
 		t.Fatalf("resolve = %d，期望 2（只有它认领分组也照样能绑）", got)
 	}
 }
@@ -124,8 +124,8 @@ func TestResolvePrefersLowestEpgIDRegardlessOfInputOrder(t *testing.T) {
 	// 两个 EPG 源都有 CCTV1。e_id 只能存一个，取 ID 最小的 ——
 	// 与入参顺序无关（map 遍历顺序是随机的）。
 	asc := []models.IptvEpg{
-		{ID: 3, Name: "CCTV1", Cas: "5", Remarks: "CCTV1"},
-		{ID: 9, Name: "CCTV1", Cas: "5", Remarks: "CCTV1"},
+		{ID: 3, Name: "CCTV1", Remarks: "CCTV1"},
+		{ID: 9, Name: "CCTV1", Remarks: "CCTV1"},
 	}
 	desc := []models.IptvEpg{asc[1], asc[0]}
 
@@ -138,7 +138,7 @@ func TestResolvePrefersLowestEpgIDRegardlessOfInputOrder(t *testing.T) {
 }
 
 func TestResolveRejectsEmptyAndUnknown(t *testing.T) {
-	epgs := []models.IptvEpg{{ID: 1, Name: "CCTV1", Cas: "5", Remarks: "CCTV1"}}
+	epgs := []models.IptvEpg{{ID: 1, Name: "CCTV1", Remarks: "CCTV1"}}
 	bi := buildBindIndex(epgs)
 
 	for _, name := range []string{"", "   ", "---", "不存在的频道"} {
@@ -148,13 +148,14 @@ func TestResolveRejectsEmptyAndUnknown(t *testing.T) {
 	}
 }
 
-// TestResolveAcceptsEmptyCas 守住"cas 不再是绑定的门槛"。
+// TestResolveAcceptsEmptyContent 守住"content 为空不影响绑定"。
 //
-// cas 为空的 EPG（内置的 18 个 CNTV EPG 就是这样）在以前**永远绑不上** ——
-// claims 为空 ⇒ resolve 一律返回 0。现在判定不看 cas，它照样能按名字命中。
-func TestResolveAcceptsEmptyCas(t *testing.T) {
-	epgs := []models.IptvEpg{{ID: 1, Name: "CCTV1", Cas: "", Remarks: "CCTV1|CCTV-1"}}
+// content 为空的 EPG（内置的 18 个 CNTV EPG 在用户没手动绑过时就是这样）
+// 在以前**永远绑不上** —— claims 为空 ⇒ resolve 一律返回 0。
+// 现在判定不看分组认领，它照样能按名字命中。
+func TestResolveAcceptsEmptyContent(t *testing.T) {
+	epgs := []models.IptvEpg{{ID: 1, Name: "CCTV1", Remarks: "CCTV1|CCTV-1"}}
 	if got := buildBindIndex(epgs).resolve("CCTV1"); got != 1 {
-		t.Fatalf("resolve = %d，期望 1（cas 为空不再影响绑定）", got)
+		t.Fatalf("resolve = %d，期望 1（content 为空不再影响绑定）", got)
 	}
 }

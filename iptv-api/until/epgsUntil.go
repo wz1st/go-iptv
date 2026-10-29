@@ -349,8 +349,8 @@ func UpdataEpgListOne(list models.IptvEpgList, newAdd bool) (bool, error) {
 // bindIndex 是"频道名 -> 目标 EPG"的查找表。
 //
 // 2026-10-29 起**不再按分组（caID）限制**：频道名命中哪条规则就绑哪个 EPG，
-// 与它落在哪个分组无关。cas（分组认领）只服务于引擎侧的模糊识别，
-// 不再参与 api 侧这条规则绑定的判定。
+// 与它落在哪个分组无关。"EPG 认领哪些分组"（cas）这个概念已整体删除 ——
+// api 侧不再有分组限制，引擎侧的模糊识别也不再看它。
 type bindIndex struct {
 	manual map[string][]int64 // 归一化频道名 -> epgID（来自 Content：手动绑定名单）
 	exact  map[string][]int64 // 归一化 EPG 名 -> epgID
@@ -383,8 +383,8 @@ func buildBindIndex(epgs []models.IptvEpg) *bindIndex {
 		for _, a := range strings.Split(epg.Remarks, "|") {
 			put(bi.alias, a)
 		}
-		// Content 里既有管理端手动勾选的，也有历史识别结果，
-		// 一律按"显式绑定"对待 —— 它必须压过自动别名匹配。
+		// Content 是**用户手动指定**的频道名单 —— 它必须压过自动别名匹配。
+		// 自动绑定的结果存在 BoundNames 里，不参与判定（否则规则改了也不生效）。
 		for _, n := range strings.Split(epg.Content, ",") {
 			put(bi.manual, n)
 		}
@@ -493,6 +493,9 @@ func BindChannel() []int64 {
 	// 名字是全局的，但 UPDATE 仍按分组下发 —— 同一分组内一次改一批。
 	pending := make(map[[2]int64][]string)
 	seen := make(map[[2]int64]map[string]struct{})
+	// bound 收集"实际绑定到每个 EPG 的频道名"（含本来就绑对的）——
+	// 回写 Content 用的是它，而不是"这次改了几条"。
+	bound := make(map[int64]map[string]struct{})
 	for _, r := range rows {
 		desired := bi.resolve(r.Name)
 		if desired == 0 {
@@ -500,6 +503,10 @@ func BindChannel() []int64 {
 			// 解绑是"清空绑定"的活儿，不该在这里顺手做。
 			continue
 		}
+		if bound[desired] == nil {
+			bound[desired] = make(map[string]struct{}, 8)
+		}
+		bound[desired][r.Name] = struct{}{}
 		if desired == r.EpgID {
 			// 已经绑对了，不动它（也不刷新它的更新时间）。
 			continue
@@ -560,6 +567,16 @@ func BindChannel() []int64 {
 		log.Printf("EPG 绑定完成：更新 %d 条频道绑定", updated)
 	}
 
+	// 回写 Content：让「绑定频道」那一列显示的就是**当前真正绑着的频道名**。
+	//
+	// Content 是全量重写，不是追加 —— 追加会让"改判"留下旧记录
+	//（频道已经改绑到别的 EPG 了，老 EPG 的名单里还挂着它）。
+	// 全量重写顺带保证了独占：某个名字改判给别人后，会自动从原 EPG 的名单里消失。
+	//
+	// 原 Content 里那些"规则命中不了"的名字（用户手动指定的）要**保留** ——
+	// 它们对应的频道可能还没被导入，或者刚被删了，不能因为一次重算就丢掉。
+	writeBackEpgBoundNames(epgList, bound)
+
 	if len(touched) > 0 {
 		cfg := dao.GetConfig()
 		if cfg != nil && cfg.Epg.Fuzz == 1 && dao.Lic.Type != 0 {
@@ -568,6 +585,82 @@ func BindChannel() []int64 {
 		}
 	}
 	return touched
+}
+
+// MergeBoundChannelNames 把"手动绑定名单"与"自动绑定结果清单"合并成一份展示用的清单。
+//
+// 管理端 EPG 列表的「绑定频道」列显示的就是这个 —— 用户要看到的是
+// "这个 EPG 当前绑着哪些台"的完整清单，不关心它是手动绑的还是规则算出来的。
+//
+// 内部两个来源分开存（判定只用手动那份），合并只发生在展示层。
+func MergeBoundChannelNames(manual, auto string) string {
+	seen := make(map[string]struct{}, 8)
+	out := make([]string, 0, 8)
+	add := func(s string) {
+		for _, n := range strings.Split(s, ",") {
+			n = strings.TrimSpace(n)
+			if n == "" {
+				continue
+			}
+			if _, dup := seen[n]; dup {
+				continue
+			}
+			seen[n] = struct{}{}
+			out = append(out, n)
+		}
+	}
+	add(manual)
+	add(auto)
+	return strings.Join(out, ",")
+}
+
+// writeBackEpgBoundNames 把"当前真正绑到每个 EPG 的频道名"写回 iptv_epg.bound_names。
+//
+// 为什么要有这一步：管理端 EPG 列表有一列「绑定频道」，它显示的应该是
+// "这个 EPG 当前绑着哪些台"。以前自动绑定只改 iptv_channels.epg_id，
+// 哪儿都没记 ⇒ 那一列永远是「-」，用户看不到自动绑定到底绑上了哪些台。
+//
+// 写的是 BoundNames 而不是 Content，两个字段分工明确：
+//   - BoundNames = 自动绑定的结果，**不参与判定** ⇒ 用户改了别名/新增了 EPG，
+//     规则照样生效，不会被旧结果钉死；
+//   - Content = 用户手动指定的名单，参与判定、优先级最高 ⇒ 不会被这里冲掉。
+//
+// 全量重写（不是追加）：某个频道改判到别的 EPG 后，它必须从原 EPG 的名单里
+// 消失，否则名单与实际绑定对不上。顺带保证独占。
+func writeBackEpgBoundNames(epgs []models.IptvEpg, bound map[int64]map[string]struct{}) {
+	for _, epg := range epgs {
+		names := make([]string, 0, 16)
+		for n := range bound[epg.ID] {
+			names = append(names, n)
+		}
+
+		// 去重 + 排序（顺序稳定 ⇒ 同一份绑定不会让名单来回抖动）。
+		uniq := make([]string, 0, len(names))
+		seen := make(map[string]struct{}, len(names))
+		for _, n := range names {
+			if strings.TrimSpace(n) == "" {
+				continue
+			}
+			if _, dup := seen[n]; dup {
+				continue
+			}
+			seen[n] = struct{}{}
+			uniq = append(uniq, n)
+		}
+		sort.Strings(uniq)
+
+		newNames := strings.Join(uniq, ",")
+		if newNames == epg.BoundNames {
+			continue
+		}
+		if err := dao.DB.Model(&models.IptvEpg{}).
+			Where("id = ?", epg.ID).
+			Update("bound_names", newNames).Error; err != nil {
+			log.Printf("⚠️ 回写 EPG %d 的绑定频道名单失败: %v", epg.ID, err)
+			continue
+		}
+		log.Printf("EPG %d(%s) 的绑定频道名单已更新：%d 个频道", epg.ID, epg.Name, len(uniq))
+	}
 }
 
 // ReleaseNamesFromOtherEpgs 把一批频道名从"会跟它打架的其它 EPG"的 Content 里摘掉。
@@ -641,7 +734,6 @@ func SyncEpgs(fromId int64, epgs []models.IptvEpg, newAdd bool) (bool, error) {
 				epgs[i].Content = o.Content
 				epgs[i].Remarks = o.Remarks
 				epgs[i].Status = o.Status
-				epgs[i].Cas = o.Cas
 			}
 			newMap[n.Name] = true
 		}
@@ -678,11 +770,6 @@ func SyncEpgs(fromId int64, epgs []models.IptvEpg, newAdd bool) (bool, error) {
 	}
 	addCount := 0
 	if len(toAdd) > 0 {
-		var caIDs []int64
-		dao.DB.Model(&models.IptvCategory{}).
-			Where("enable = 1 AND type not like ?", "auto%").
-			Pluck("id", &caIDs)
-
 		for _, toAddOne := range toAdd {
 			oldList := strings.Split(toAddOne.FromList, ",")
 			tmpList := append(oldList, fmt.Sprintf("%d", fromId))
@@ -691,9 +778,6 @@ func SyncEpgs(fromId int64, epgs []models.IptvEpg, newAdd bool) (bool, error) {
 
 			if EqualStringSets(oldList, tmpList) {
 				continue
-			}
-			if toAddOne.ID == 0 {
-				toAddOne.Cas = strings.Trim(strings.Join(strings.Fields(fmt.Sprint(caIDs)), ","), "[]") // 转换为字符串
 			}
 			addCount++
 			dao.DB.Save(&toAddOne)

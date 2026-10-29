@@ -27,9 +27,9 @@ func GetChName(req dto.ReqID) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "查询EPG 失败", Type: "danger"}
 	}
 
-	// 2026-10-29：不再按 epg.Cas（自动绑定的分组）过滤候选频道。
+	// 2026-10-29：不再按分组过滤候选频道。
 	// 绑定已经改成"全局按频道名判定"，候选集就应该是**全部**频道名 ——
-	// 否则用户在一个没被认领的分组里，想手动绑定某个台都做不到。
+	// 否则用户想手动绑定某个台都做不到。
 	var channeList []models.IptvChannel
 	if err := dao.DB.Model(&models.IptvChannel{}).
 		Select("distinct name").
@@ -77,21 +77,6 @@ func SaveEpg(req dto.EpgSaveReq) dto.ReturnJsonDto {
 	epgData.Remarks = req.Remarks
 
 	epgData.FromList = req.FromList
-	// 2026-10-29：cas（"这个 EPG 认领哪些分组"）不再由前端指定 ——
-	// 绑定判定已经取消 caID 限制，前端那个分组多选框也已一并去掉。
-	//
-	// 但 cas 这个字段**不能删**：引擎侧的 EPG 模糊识别（iptv-engine 的
-	// CheckChEpg）仍按它筛"这个 EPG 能认领哪些分组"，那是另一个独立操作，
-	// 不在本次改动范围内。所以这里改为**服务端自动维护**：
-	//   - 新建 EPG ⇒ 认领全部启用的非聚合分组（与 SyncEpgs 新增 EPG 时一致）；
-	//   - 改 EPG ⇒ 保持原值不动（分组增减由 SyncCaToEpg / RemoveCaFromEpg 负责）。
-	if id == 0 {
-		var caIDs []int64
-		dao.DB.Model(&models.IptvCategory{}).
-			Where("enable = 1 AND type not like ?", "auto%").
-			Pluck("id", &caIDs)
-		epgData.Cas = strings.Trim(strings.Join(strings.Fields(fmt.Sprint(caIDs)), ","), "[]")
-	}
 
 	if err := dao.DB.Save(&epgData).Error; err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "保存EPG失败", Type: "danger"}
@@ -211,8 +196,9 @@ func BindChannel() dto.ReturnJsonDto {
 // 只清 content 的话，频道的 epg_id 还指着旧 EPG，节目单照旧下发，
 // 用户看到的是"绑定列表空了但节目单还在"——这就是以前的毛病。
 func ClearBind() dto.ReturnJsonDto {
-	// 1) 清 EPG 表里的手动绑定名单。
-	if err := dao.DB.Model(&models.IptvEpg{}).Where("content != ''").Update("content", "").Error; err != nil {
+	// 1) 清 EPG 表里的手动绑定名单 + 自动绑定结果清单。
+	if err := dao.DB.Model(&models.IptvEpg{}).Where("content != '' OR bound_names != ''").
+		Updates(map[string]interface{}{"content": "", "bound_names": ""}).Error; err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "清除绑定失败:" + err.Error(), Type: "danger"}
 	}
 

@@ -2,6 +2,7 @@ package until
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"iptv-api/dao"
@@ -83,8 +84,8 @@ func channelEpgID(t *testing.T, id int64) int64 {
 
 // TestBindChannelIgnoresCategoryClaim 守住"取消 caID 限制"。
 //
-// EPG 的 cas（认领分组）为空 —— 以前这种 EPG 永远绑不上任何频道。
-// 现在判定只看频道名，它照样能绑。
+// EPG 没有"认领分组"这回事（cas 字段已整体删除）—— 以前要求 EPG 认领该分组，
+// 不认领就永远绑不上任何频道。现在判定只看频道名，它照样能绑。
 func TestBindChannelIgnoresCategoryClaim(t *testing.T) {
 	setupBindDB(t)
 
@@ -95,7 +96,7 @@ func TestBindChannelIgnoresCategoryClaim(t *testing.T) {
 	BindChannel()
 
 	if got := channelEpgID(t, chID); got != epgID {
-		t.Fatalf("频道 epg_id = %d，期望 %d（cas 为空也要能绑上）", got, epgID)
+		t.Fatalf("频道 epg_id = %d，期望 %d（不认领分组也要能绑上）", got, epgID)
 	}
 }
 
@@ -190,5 +191,153 @@ func TestBindChannelCrossesCategories(t *testing.T) {
 	}
 	if got := channelEpgID(t, chB); got != epgID {
 		t.Fatalf("分组B 的频道 epg_id = %d，期望 %d（跨分组同样要绑上）", got, epgID)
+	}
+}
+
+// epgBoundNames 读某条 EPG 当前记录的 bound_names（自动绑定的结果清单）。
+func epgBoundNames(t *testing.T, id int64) string {
+	t.Helper()
+	var epg models.IptvEpg
+	if err := dao.DB.First(&epg, "id = ?", id).Error; err != nil {
+		t.Fatalf("读 EPG 失败: %v", err)
+	}
+	return epg.BoundNames
+}
+
+// epgManualNames 读某条 EPG 当前记录的 content（用户手动绑定的名单）。
+func epgManualNames(t *testing.T, id int64) string {
+	t.Helper()
+	var epg models.IptvEpg
+	if err := dao.DB.First(&epg, "id = ?", id).Error; err != nil {
+		t.Fatalf("读 EPG 失败: %v", err)
+	}
+	return epg.Content
+}
+
+// TestBindChannelWritesBackContent 守住"绑定成功的频道名要记进 bound_names"。
+//
+// 管理端 EPG 列表有一列「绑定频道」，显示的就是"这个 EPG 当前绑着哪些台"。
+// 自动绑定以前只改 iptv_channels.epg_id，哪儿都没记 ⇒ 那一列永远是「-」。
+func TestBindChannelWritesBackContent(t *testing.T) {
+	setupBindDB(t)
+
+	caID := newBindCategory(t, "央视", "add", true)
+	epgID := newBindEpg(t, "CCTV1", "CCTV1|CCTV-1", "")
+	newBindChannel(t, caID, "CCTV1", 0)
+	newBindChannel(t, caID, "CCTV-1", 0)
+
+	BindChannel()
+
+	got := epgBoundNames(t, epgID)
+	if !strings.Contains(got, "CCTV1") || !strings.Contains(got, "CCTV-1") {
+		t.Fatalf("bound_names = %q，期望包含绑定成功的两个频道名", got)
+	}
+}
+
+// TestWriteBackDoesNotTouchManualNames 守住"回写不动手动绑定的名单"。
+//
+// content = 用户手动指定的名单（参与判定、优先级最高）；
+// bound_names = 自动绑定的结果（只展示）。两者分开存，回写只碰后者。
+func TestWriteBackDoesNotTouchManualNames(t *testing.T) {
+	setupBindDB(t)
+
+	caID := newBindCategory(t, "央视", "add", true)
+	epgID := newBindEpg(t, "CCTV1", "CCTV1", "手动指定的台子")
+	newBindChannel(t, caID, "CCTV1", 0)
+
+	BindChannel()
+
+	if got := epgManualNames(t, epgID); got != "手动指定的台子" {
+		t.Fatalf("content = %q，期望原样保留手动指定的名单", got)
+	}
+	got := epgBoundNames(t, epgID)
+	if !strings.Contains(got, "CCTV1") {
+		t.Fatalf("bound_names = %q，期望包含自动绑定上的 CCTV1", got)
+	}
+}
+
+// TestWriteBackContentIsFullRewrite 守住"回写是全量重写，不是追加"。
+//
+// 频道改判到别的 EPG 后，它必须从原 EPG 的名单里消失 —— 追加会留下旧记录，
+// 名单与实际绑定就对不上了。
+func TestWriteBackContentIsFullRewrite(t *testing.T) {
+	setupBindDB(t)
+
+	caID := newBindCategory(t, "央视", "add", true)
+	epgA := newBindEpg(t, "CCTV1", "CCTV1", "")
+	epgB := newBindEpg(t, "湖南卫视", "湖南卫视|CCTV1", "")
+	newBindChannel(t, caID, "CCTV1", 0)
+
+	// 两条规则等价 ⇒ 取 ID 最小的 epgA。
+	BindChannel()
+	if got := epgBoundNames(t, epgA); !strings.Contains(got, "CCTV1") {
+		t.Fatalf("epgA 的 bound_names = %q，期望包含 CCTV1", got)
+	}
+
+	// 把 epgA 下线 ⇒ CCTV1 只能落到 epgB。
+	// 注意：下线的 EPG 不参与重算（BindChannel 只认启用中的），所以它的名单
+	// 保持原样（上线后还能用）—— 这里要断言的是**启用中的** epgB 拿到了 CCTV1。
+	dao.DB.Model(&models.IptvEpg{}).Where("id = ?", epgA).Update("status", 0)
+	BindChannel()
+
+	if got := epgBoundNames(t, epgB); !strings.Contains(got, "CCTV1") {
+		t.Fatalf("epgB 的 bound_names = %q，期望包含 CCTV1", got)
+	}
+	if got := epgBoundNames(t, epgA); !strings.Contains(got, "CCTV1") {
+		t.Fatalf("epgA 已下线，bound_names = %q，期望保留原值（不上线就不该被清）", got)
+	}
+}
+
+// TestWriteBackDoesNotFreezeRules 守住"回写不会把规则钉死"。
+//
+// 这是最容易踩的坑：如果把自动绑定的结果写回 content（手动名单），它就会
+// 变成"手动指定"，用户改了别名/新增了 EPG 之后，旧结果会把频道死死按在
+// 老 EPG 上 —— 规则改了不生效。
+//
+// 解法：自动结果单独存 bound_names，不参与判定；content 仍是纯手动名单。
+func TestWriteBackDoesNotFreezeRules(t *testing.T) {
+	setupBindDB(t)
+
+	caID := newBindCategory(t, "央视", "add", true)
+	epgA := newBindEpg(t, "CCTV1", "CCTV1", "")
+	chID := newBindChannel(t, caID, "CCTV1", 0)
+
+	BindChannel()
+	if got := epgBoundNames(t, epgA); !strings.Contains(got, "CCTV1") {
+		t.Fatalf("bound_names = %q，期望包含 CCTV1", got)
+	}
+
+	// 让 epgA **彻底**不再认 CCTV1，同时新增一条认 CCTV1 的 EPG。
+	// ⚠️ 必须连 Name 一起改：EPG 名进的是 exact 桶，优先级高于 alias 桶，
+	//    只清 remarks 的话 CCTV1 仍然命中 epgA 的 exact —— 那是正常的优先级
+	//    行为，不是"被旧结果钉死"，测不出东西。
+	dao.DB.Model(&models.IptvEpg{}).Where("id = ?", epgA).
+		Updates(map[string]interface{}{"name": "台子A", "remarks": ""})
+	epgB := newBindEpg(t, "央视一套", "央视一套|CCTV1", "")
+
+	BindChannel()
+
+	if got := channelEpgID(t, chID); got != epgB {
+		t.Fatalf("频道 epg_id = %d，期望 %d（改了规则就该改判，不能被旧结果钉死）", got, epgB)
+	}
+	if got := epgBoundNames(t, epgA); strings.Contains(got, "CCTV1") {
+		t.Fatalf("epgA 的 bound_names = %q，期望不再包含 CCTV1", got)
+	}
+}
+
+// TestMergeBoundChannelNames 守住展示层的合并：手动 ∪ 自动，去重且顺序稳定。
+func TestMergeBoundChannelNames(t *testing.T) {
+	got := MergeBoundChannelNames("CCTV1,湖南卫视", "CCTV1,央视一套")
+	want := "CCTV1,湖南卫视,央视一套"
+	if got != want {
+		t.Fatalf("MergeBoundChannelNames = %q，期望 %q", got, want)
+	}
+
+	if got := MergeBoundChannelNames("", ""); got != "" {
+		t.Fatalf("MergeBoundChannelNames = %q，期望空串", got)
+	}
+	// 空项要丢掉，不能出现 "a,,b"
+	if got := MergeBoundChannelNames("a,,b", ""); got != "a,b" {
+		t.Fatalf("MergeBoundChannelNames = %q，期望 %q", got, "a,b")
 	}
 }

@@ -1,14 +1,24 @@
 package models
 
 // iptv_epg —— EPG（节目单）条目。
+//
+// Content 与 BoundNames 分工明确（2026-10-29）：
+//   - Content：用户**手动**绑定的频道名单。参与绑定判定，优先级最高。
+//   - BoundNames：自动绑定算出来的"当前真正绑着哪些频道"。**不参与判定**，
+//     只用来在管理端「绑定频道」那一列展示。
+//
+// 为什么不能合成一个字段：合成之后，自动绑定的结果会变成"手动指定"，
+// 用户改了别名/新增了 EPG 之后，旧结果会把频道死死按在老 EPG 上（规则不生效）；
+// 而用户手动指定的名单又会被自动回写冲掉。两个来源在数据上无法区分，必须分开存。
 type IptvEpg struct {
-	ID       int64  `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	Name     string `gorm:"column:name" json:"name"`
-	Content  string `gorm:"column:content" json:"content"`
-	Cas      string `gorm:"column:cas" json:"cas"`
-	FromList string `gorm:"column:from_list" json:"fromList"`
-	Status   bool   `gorm:"column:status" json:"status"`
-	Remarks  string `gorm:"column:remarks" json:"remarks"`
+	ID      int64  `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	Name    string `gorm:"column:name" json:"name"`
+	Content string `gorm:"column:content" json:"content"`
+	// BoundNames 是自动绑定的结果清单（逗号分隔的频道名）。
+	BoundNames string `gorm:"column:bound_names" json:"boundNames"`
+	FromList   string `gorm:"column:from_list" json:"fromList"`
+	Status     bool   `gorm:"column:status" json:"status"`
+	Remarks    string `gorm:"column:remarks" json:"remarks"`
 
 	FromName string `gorm:"-" json:"fromName"`
 	Logo     string `gorm:"-" json:"logo"`

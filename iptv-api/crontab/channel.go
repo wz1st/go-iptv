@@ -321,7 +321,6 @@ func GenreChannels(srclist string, list models.IptvCategoryList, doRepeat, group
 			if err := dao.DB.Create(&category).Error; err != nil {
 				continue
 			}
-			until.SyncCaToEpg(category.ID)
 			until.AddChannelList(genreList.SrcList, category.ID, list.ID, doRepeat)
 		} else {
 			until.AddChannelList(genreList.SrcList, category.ID, list.ID, doRepeat)

@@ -326,42 +326,6 @@ func categoryName(cId int64) string {
 	return name
 }
 
-// SyncCaToEpg 把一个分组 id 挂到所有启用中的 EPG 的 cas 上（"这个 EPG 认领哪些分组"）。
-func SyncCaToEpg(caId int64) {
-	caIdStr := fmt.Sprintf("%d", caId)
-
-	dao.DB.Model(&models.IptvEpg{}).
-		Where("status = 1").
-		Update("cas", gorm.Expr(`
-			CASE
-				WHEN cas IS NULL OR cas = '' THEN ?
-				WHEN instr(',' || cas || ',', ',' || ? || ',') = 0 THEN cas || ',' || ?
-				ELSE cas
-			END
-		`, caIdStr, caIdStr, caIdStr))
-}
-
-func RemoveCaFromEpg(caId int64) {
-	caIdStr := fmt.Sprintf("%d", caId)
-
-	dao.DB.Model(&models.IptvEpg{}).
-		Where("status = 1").
-		Update("cas", gorm.Expr(`
-			TRIM(
-				REPLACE(
-					REPLACE(
-						',' || cas || ',',
-						',' || ? || ',',
-						','
-					),
-					',,',
-					','
-				),
-				','
-			)
-		`, caIdStr))
-}
-
 // upperChannelName 统一「节目单里对外显示的频道名」的大小写。
 func upperChannelName(name string) string {
 	return strings.ToUpper(name)
