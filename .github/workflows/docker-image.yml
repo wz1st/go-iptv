@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: ${{ env.WEB_REPO }}
           path: web-src
@@ -81,7 +81,7 @@ jobs:
           rm -rf ../webdist
           mv dist ../webdist
           ls -la ../webdist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: webdist
           path: webdist
@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: ${{ env.START_REPO }}
           path: start-src
@@ -114,7 +114,7 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -ldflags '-s -w' -o ../start_all/start_amd64 .
           ls -l ../start_all
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: start_all
           path: start_all
@@ -127,7 +127,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -150,7 +150,7 @@ jobs:
           ../iptv_all/iptv_amd64 -version | grep -qx "$VERSION" \
             || { echo "::error::iptv 二进制报告的版本不是 $VERSION"; ../iptv_all/iptv_amd64 -version; exit 1; }
           ls -l ../iptv_all
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: iptv_all
           path: iptv_all
@@ -210,7 +210,7 @@ jobs:
           chmod +x "$f"
           test -x "$f" || { echo "::error::engine_amd64 没有可执行位（release 资产不带 mode，必须显式 chmod）"; exit 1; }
           ( cd engine_all && sha256sum -c SHA256SUMSEngine.txt )
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: engine_all
           path: engine_all
@@ -223,21 +223,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: webdist
           path: webdist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: iptv_all
           path: iptv_all
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: engine_all
           path: engine_all
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: start_all
           path: start_all
@@ -268,7 +268,7 @@ jobs:
           cat iptv_all/SHA256SUMS.txt
 
       - name: 发布 api 到 go-iptv releases
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.version }}
           name: Release ${{ needs.prepare.outputs.version }}
@@ -310,17 +310,17 @@ jobs:
             --repo "$START_REPO" --clobber
 
       - name: 登录镜像仓库
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: 准备 Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       
       - name: 构建并推送镜像
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile.web
