@@ -116,6 +116,10 @@ var adminRoutes = []apiRoute{
 	// 直连失败或延迟过大会自动切国内加速（见 until/ghnet.go、until/mytvOnline.go）。
 	{"clientMyTV/checkBase", api.MytvCheckBase},
 	{"clientMyTV/upgradeBase", api.MytvUpgradeBase},
+	// 「测试APK地址」/「保存地址」：与清和壳同构，只是落的是 mytv 独立地址
+	// （cfg.MyTV.ServerUrl），不触发编译（编译是分钟级重活）。
+	{"clientMyTV/testUrl", api.ClientMyTVTestUrl},
+	{"clientMyTV/saveUrl", api.ClientMyTVSaveUrl},
 
 	// --- APK 客户端（编译 + 开机公告）---
 	{"client/data", api.ClientData},
