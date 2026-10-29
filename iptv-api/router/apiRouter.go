@@ -170,6 +170,9 @@ var adminRoutes = []apiRoute{
 	{"client/uploadBaseApk", api.ClientUploadBaseApk},
 	{"client/checkBase", api.ClientCheckBase},
 	{"client/upgradeBase", api.ClientUpgradeBase},
+	// 登录后静默盘点 APK 基底新版本（清和壳 / 骆驼壳 / MyTV），给菜单/标签红点用。
+	// 只覆盖 APK，管理系统自身升级不在定制分支内（换镜像更新）。
+	{"client/silentCheck", api.ClientSilentCheck},
 
 	// 骆驼壳（独立客户端基底）：与 清和壳 各自一组路由，编译接口共用 BuildClientApk。
 	{"client/lt/data", api.LuotuoData},
