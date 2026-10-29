@@ -291,14 +291,7 @@ func EpgsData(c *gin.Context) {
 		log.Println("查询epg失败:", err)
 	}
 
-	cfg := dao.GetConfig()
-	query := "enable = 1 and type not like 'auto%'"
-	if dao.Lic.Type != 0 && cfg.Proxy.Status == 1 {
-		query = "enable = 1"
-	}
-
 	dao.DB.Model(&models.IptvEpgList{}).Find(&pageData.EpgFromDb)
-	dao.DB.Model(&models.IptvCategory{}).Where(query).Find(&pageData.CaList)
 
 	logoList := until.GetLogos()
 

@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.version || github.ref }}
 
@@ -128,7 +128,7 @@ jobs:
       # Client.apk / Version_client 与 Client_lt.apk / Version_client_lt 逐字找，
       # 改名不会有报错，只会在用户点「在线升级」时变成"下载不到"。
       - name: 发布基底到 go-iptv releases
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.check.outputs.tag }}
           name: ${{ steps.sel.outputs.disp }} v${{ steps.check.outputs.version }}

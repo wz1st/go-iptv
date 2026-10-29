@@ -37,10 +37,13 @@ package until
 // 后端据此返回 https:// 地址（APK 取流/下载不再拿到 http 明文地址而失败）；
 // 「80 强制跳转 HTTPS」在请求已带 X-Forwarded-Proto: https 时**不再跳转**，
 // 避免与反代自身的跳转形成环路。站点的直连与"自己开 HTTPS"两种老场景行为完全不变。
-// v4.10.3-custom.2（分组↔套餐反查缺陷修复，只动 api ⇒ 只递增第三段）：
-// mealIdsReferencingCategories 拼了带 ? 的 SQL 却没把参数传给 Where()，
-// 驱动收到没有绑定的占位符就报 "missing argument with index 1"，
-// 该函数恒返回 nil ⇒「改了分组/排序后作废对应套餐的订阅与 EPG 缓存」
-// 这条链路整条静默失效（用户看到的却是刷屏的错误日志）。
-// 修法：把参数传进去，并在失败时打日志（别再静默）。
-var Version = "v4.10.3-custom.2"
+// v4.10.4-custom.1（同步主线 v4.10.4：EPG 自动绑定取消 caID 限制 + 清空绑定真正解绑）：
+// ① 自动绑定不再按分组（caID）限制 —— bindIndex.resolve 去掉 caID 参数，
+// 判定只看频道名与规则表（手动绑定名单 > EPG 名 > 自动绑定别名），遍历全部频道名
+// （跨分组）。以前要求 EPG 的 cas 认领该分组，cas 为空的 EPG（内置 18 个 CNTV EPG）
+// 永远绑不上任何频道。
+// ② 清空绑定真正解绑：除清 iptv_epg.content 外，还把 iptv_channels.epg_id 归零 ——
+// 只清 content 的话频道仍挂着旧 EPG、节目单照旧下发。该操作不重算绑定。
+// ③ 前端去掉「自动绑定的分组」多选框（api 判定已不认这个限制）。
+// ④ 修复「分组 ↔ 套餐」反查漏传 SQL 参数（缺陷自 v4.10.2 起就在生产）。
+var Version = "v4.10.4-custom.1"

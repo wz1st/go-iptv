@@ -347,31 +347,25 @@ func UpdataEpgListOne(list models.IptvEpgList, newAdd bool) (bool, error) {
 // 频道 → EPG 绑定
 
 // bindIndex 是"频道名 -> 目标 EPG"的查找表。
+//
+// 2026-10-29 起**不再按分组（caID）限制**：频道名命中哪条规则就绑哪个 EPG，
+// 与它落在哪个分组无关。cas（分组认领）只服务于引擎侧的模糊识别，
+// 不再参与 api 侧这条规则绑定的判定。
 type bindIndex struct {
-	claims map[int64]map[int64]struct{} // epgID -> 该 EPG 认领的 caID 集合（cas）
-	manual map[string][]int64           // 归一化频道名 -> epgID（来自 Content）
-	exact  map[string][]int64           // 归一化 EPG 名 -> epgID
-	alias  map[string][]int64           // 归一化别名   -> epgID（来自 Remarks）
+	manual map[string][]int64 // 归一化频道名 -> epgID（来自 Content：手动绑定名单）
+	exact  map[string][]int64 // 归一化 EPG 名 -> epgID
+	alias  map[string][]int64 // 归一化别名   -> epgID（来自 Remarks：自动绑定规则）
 }
 
 // buildBindIndex 一次性建好索引。
 func buildBindIndex(epgs []models.IptvEpg) *bindIndex {
 	bi := &bindIndex{
-		claims: make(map[int64]map[int64]struct{}, len(epgs)),
 		manual: make(map[string][]int64),
 		exact:  make(map[string][]int64),
 		alias:  make(map[string][]int64),
 	}
 
 	for _, epg := range epgs {
-		cats := make(map[int64]struct{}, 4)
-		for _, s := range strings.Split(epg.Cas, ",") {
-			if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
-				cats[n] = struct{}{}
-			}
-		}
-		bi.claims[epg.ID] = cats
-
 		put := func(bucket map[string][]int64, name string) {
 			k := NormalizeChannelKey(name)
 			if k == "" {
@@ -407,26 +401,60 @@ func buildBindIndex(epgs []models.IptvEpg) *bindIndex {
 	return bi
 }
 
-// resolve 返回频道 channelName 在分类 caID 下应当绑定的 EPG ID；0 表示判不出。
-func (bi *bindIndex) resolve(caID int64, channelName string) int64 {
+// resolve 返回频道 channelName 应当绑定的 EPG ID；0 表示判不出。
+//
+// 判定只看**频道名**与规则表，不看分组 —— 这就是"取消 caID 限制"的落点。
+func (bi *bindIndex) resolve(channelName string) int64 {
 	key := NormalizeChannelKey(channelName)
 	if key == "" {
 		return 0
 	}
 	for _, bucket := range []map[string][]int64{bi.manual, bi.exact, bi.alias} {
 		for _, epgID := range bucket[key] {
-			if _, ok := bi.claims[epgID][caID]; ok {
-				return epgID
-			}
+			return epgID
 		}
 	}
 	return 0
+}
+
+// EpgNameMatcher 是"频道名 -> 目标 EPG"的规则表。
+//
+// 一次性建好、批量判定用：手动绑定弹窗要问"这一串频道名分别归谁"，
+// 逐个查库会打出成百上千条 SQL。
+type EpgNameMatcher struct {
+	bi *bindIndex
+}
+
+// NewEpgNameMatcher 用当前启用中的 EPG 建好规则表。
+func NewEpgNameMatcher() *EpgNameMatcher {
+	var epgList []models.IptvEpg
+	if err := dao.DB.Model(&models.IptvEpg{}).Where("status = 1").Order("id asc").Find(&epgList).Error; err != nil {
+		log.Println("建立EPG绑定规则表失败:", err)
+		return &EpgNameMatcher{bi: buildBindIndex(nil)}
+	}
+	return &EpgNameMatcher{bi: buildBindIndex(epgList)}
+}
+
+// Resolve 返回该频道名应绑定的 EPG ID（0 = 没有任何规则命中）。
+func (m *EpgNameMatcher) Resolve(channelName string) int64 {
+	if m == nil || m.bi == nil {
+		return 0
+	}
+	return m.bi.resolve(channelName)
 }
 
 // bindNameBatch 是 `name IN (...)` 的分块大小。
 const bindNameBatch = 400
 
 // BindChannel 重算「频道 -> EPG」绑定。
+//
+// 2026-10-29 起改成**全局按名字**重算：
+//   - 遍历**全部**频道名（跨分组，不再按 caID 分桶）；
+//   - 频道名命中某条规则（手动绑定名单 / EPG 名 / 自动绑定别名）即视为该绑；
+//   - 已有绑定的**改**到新目标，没绑定的**补**上。
+//
+// 仍然排除聚合分组（type like 'auto%'）：那些分组的频道表由引擎侧
+// 按 EPG 聚合反推，api 不去改它们的 epg_id。
 //
 // 返回值是"绑定关系发生变化的频道分组 id 列表"（去重、升序无关）。
 // 调用方据此决定失效范围 —— 本函数**只重算绑定**，不再自行作废缓存：
@@ -443,7 +471,8 @@ func BindChannel() []int64 {
 	}
 	bi := buildBindIndex(epgList)
 
-	// 一次把"可绑定"的频道取全：非自动分类 + 启用中 + status = 1。
+	// 一次把候选频道取全：非聚合分组 + 启用中 + status = 1。
+	// 这里**不再按分组分桶** —— 同一个名字在哪个分组都指向同一个 EPG。
 	type chRow struct {
 		CategoryID int64  `gorm:"column:category_id"`
 		Name       string `gorm:"column:name"`
@@ -460,12 +489,19 @@ func BindChannel() []int64 {
 		return nil
 	}
 
-	// 按 (分类, 目标EPG) 归并待改写项。
+	// 按 (分组, 目标EPG) 归并待改写项。
+	// 名字是全局的，但 UPDATE 仍按分组下发 —— 同一分组内一次改一批。
 	pending := make(map[[2]int64][]string)
 	seen := make(map[[2]int64]map[string]struct{})
 	for _, r := range rows {
-		desired := bi.resolve(r.CategoryID, r.Name)
-		if desired == 0 || desired == r.EpgID {
+		desired := bi.resolve(r.Name)
+		if desired == 0 {
+			// 没有任何规则命中这个频道名 ⇒ 保持原样（不主动解绑）。
+			// 解绑是"清空绑定"的活儿，不该在这里顺手做。
+			continue
+		}
+		if desired == r.EpgID {
+			// 已经绑对了，不动它（也不刷新它的更新时间）。
 			continue
 		}
 		key := [2]int64{r.CategoryID, desired}
@@ -495,7 +531,7 @@ func BindChannel() []int64 {
 	touched := make([]int64, 0, len(keys))
 	var lastCa int64 = -1
 	for _, k := range keys {
-		// 按 (分类, 目标EPG) 一条 UPDATE 覆盖它名下所有要改的频道名。
+		// 按 (分组, 目标EPG) 一条 UPDATE 覆盖它名下所有要改的频道名。
 		names := pending[k]
 		for i := 0; i < len(names); i += bindNameBatch {
 			end := i + bindNameBatch
@@ -534,30 +570,11 @@ func BindChannel() []int64 {
 	return touched
 }
 
-// splitCategoryIds 把 "1,2,3" 解析成 int64 集合。
-func splitCategoryIds(s string) map[int64]struct{} {
-	out := make(map[int64]struct{}, 4)
-	for _, part := range strings.Split(s, ",") {
-		if n, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
-			out[n] = struct{}{}
-		}
-	}
-	return out
-}
-
-// sharesCategory 判断两组分类是否有交集。
-func sharesCategory(a map[int64]struct{}, b string) bool {
-	for _, part := range strings.Split(b, ",") {
-		if n, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
-			if _, ok := a[n]; ok {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // ReleaseNamesFromOtherEpgs 把一批频道名从"会跟它打架的其它 EPG"的 Content 里摘掉。
+//
+// 2026-10-29 起**不再按分组判断会不会打架**：绑定已经改成全局按名字判定
+// （见 bindIndex.resolve），同一个名字被两个 EPG 认领就是真冲突 ——
+// 不管它们在不在同一个分组。
 func ReleaseNamesFromOtherEpgs(keepEpgID int64, names []string) {
 	want := make(map[string]struct{}, len(names))
 	for _, n := range names {
@@ -569,29 +586,15 @@ func ReleaseNamesFromOtherEpgs(keepEpgID int64, names []string) {
 		return
 	}
 
-	var keep models.IptvEpg
-	if err := dao.DB.Model(&models.IptvEpg{}).Where("id = ?", keepEpgID).First(&keep).Error; err != nil {
-		log.Printf("⚠️ 清理重复绑定失败：查询 EPG %d 出错: %v", keepEpgID, err)
-		return
-	}
-	keepCats := splitCategoryIds(keep.Cas)
-	if len(keepCats) == 0 {
-		return
-	}
-
 	var others []models.IptvEpg
 	if err := dao.DB.Model(&models.IptvEpg{}).
-		Where("id <> ? AND cas <> ''", keepEpgID).
+		Where("id <> ?", keepEpgID).
 		Find(&others).Error; err != nil {
 		log.Println("⚠️ 清理重复绑定失败：查询其它 EPG 出错:", err)
 		return
 	}
 
 	for _, epg := range others {
-		if !sharesCategory(keepCats, epg.Cas) {
-			continue
-		}
-
 		kept := make([]string, 0, 8)
 		removed := 0
 		for _, n := range strings.Split(epg.Content, ",") {

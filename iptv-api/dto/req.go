@@ -121,7 +121,6 @@ type EpgSaveReq struct {
 	ID       int64  `json:"id"`
 	Name     string `json:"name"`
 	Remarks  string `json:"remarks"`
-	CaList   string `json:"caList"`
 	FromList string `json:"fromList"`
 }
 
