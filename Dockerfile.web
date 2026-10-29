@@ -29,6 +29,12 @@ COPY mytv /app/mytv
 
 # 换源 → 装包 → 拉 build-tools（走代理）→ 清理。
 # 顺序有讲究：换源必须**在 apk add 之前**；代理只对 curl 那一步生效。
+#
+# ★换源与下面那句自检都不能省：docker 构建网络到不了 dl-cdn（宿主机 curl 200、
+# 构建容器内 Permission denied），apk add 会报 "no such package" 但 **buildkit
+# 仍当该层成功**，产出缺 nginx/openjdk/ffmpeg 的残镜像（315MB vs 正常 693MB），
+# 容器一起来就死。此前没暴露只因该层命中过 CACHED。
+# RUN sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#https://mirrors.tuna.tsinghua.edu.cn/alpine#g" /etc/apk/repositories
 RUN apk add --no-cache \
         openjdk17 \
         bash \
@@ -112,7 +118,7 @@ COPY client/Client.apk client/Version_client client/Client_lt.apk client/Version
 
 # 配置与文档：ChangeLog.md 每次发布都改，所以这一组也在尾部。
 # （与基包分开的单独一层：只改 ChangeLog 时不必重传基包那几十 MB。）
-COPY config.yml README.md dictionary.txt alias.json ChangeLog.md keystore.p12 /app/
+COPY config.yml README.md dictionary.txt alias.json ChangeLog.md Guide.md keystore.p12 /app/
 
 # 二进制产物。`/app/.image/{iptv,engine}` 是**启动器自愈用的镜像层副本**
 # （iptv-start/until/selfheal.go 的 ImageBackupDir）：/app 是容器可写层，

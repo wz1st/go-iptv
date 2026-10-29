@@ -6,6 +6,7 @@ import (
 	"iptv-api/dto"
 	"iptv-api/models"
 	"iptv-api/until"
+	"log"
 	"slices"
 	"strings"
 	"time"
@@ -135,8 +136,8 @@ func getEpgCntv(name string) dto.ApkResponse {
 	}
 
 	name = strings.ToLower(name)
-	// 缓存键必须**在归一化之后**算，而且只走 dao.CNTVCacheKey 一处。
-	cacheKey := dao.CNTVCacheKey(name)
+	// 缓存键必须**在归一化之后**算，而且只走 until.EpgSourceCntvKey 一处。
+	cacheKey := until.EpgSourceCntvKey(name)
 	epgUrl := "https://api.cntv.cn/epg/epginfo?c=" + name + "&serviceId=channel&d="
 
 	var jsonMap map[string]map[string]interface{}
@@ -150,11 +151,28 @@ func getEpgCntv(name string) dto.ApkResponse {
 	}
 
 	if !readCacheOk {
-		jsonStr := until.GetUrlData(epgUrl)
+		// 缓存没有 ⇒ 先看**暂存**（当天抓下来的那份）。
+		// 缓存一旦失效（/tmp/cache 每次启动被清），没有暂存就会每个请求
+		// 都重新下载一次同一个频道。
+		if staged, ok := until.LoadEpgCntvStage(name, "svc"); ok {
+			if err := json.Unmarshal(staged, &jsonMap); err == nil {
+				readCacheOk = true
+			}
+		}
+	}
+
+	if !readCacheOk {
+		jsonStr := until.GetUrlDataVia(epgUrl, until.ProxyUseEpg)
 		err := json.Unmarshal([]byte(jsonStr), &jsonMap)
 		if err != nil {
 			res.Data = []dto.Program{}
 			return res
+		}
+		// 抓到就暂存（当天有效）。
+		if raw, mErr := json.Marshal(jsonMap); mErr == nil {
+			if sErr := until.StageEpgCntv(name, "svc", raw); sErr != nil {
+				log.Println("CNTV暂存失败:", sErr)
+			}
 		}
 		if dao.Cache.SetJSON(cacheKey, jsonMap) != nil {
 			dao.Cache.Delete(cacheKey)
@@ -244,8 +262,8 @@ func getSimpleEpgCntv(name string) dto.SimpleResponse {
 		return simpleRes
 	}
 	name = strings.ToLower(name)
-	// 同 getEpgCntv：键在归一化之后算，且只走 dao.CNTVCacheKey。
-	cacheKey := dao.CNTVCacheKey(name)
+	// 同 getEpgCntv：键在归一化之后算，且只走 until.EpgSourceCntvKey。
+	cacheKey := until.EpgSourceCntvKey(name)
 	epgUrl := "https://api.cntv.cn/epg/epginfo?c=" + name + "&serviceId=channel&d="
 
 	var jsonMap map[string]map[string]interface{}
@@ -268,14 +286,32 @@ func getSimpleEpgCntv(name string) dto.SimpleResponse {
 	}
 
 	if !readCacheOk {
-		jsonStr := until.GetUrlData(epgUrl)
+		jsonStr := until.GetUrlDataVia(epgUrl, until.ProxyUseEpg)
 		err := json.Unmarshal([]byte(jsonStr), &jsonMap)
 		if err != nil {
-			simpleRes.Data = dto.Program{}
-			return simpleRes
-		}
-		if dao.Cache.SetJSON(cacheKey, jsonMap) != nil {
-			dao.Cache.Delete(cacheKey)
+			// 抓取/解析失败 ⇒ 退到当天暂存（有就比空强）。
+			// 暂存是"下载物"，不是"在播状态"：liveSt 可能过时，
+			// 但比整屏「暂无节目信息」好。
+			if staged, ok := until.LoadEpgCntvStage(name, "svc"); ok {
+				if sErr := json.Unmarshal(staged, &jsonMap); sErr == nil {
+					readCacheOk = true
+				}
+			}
+			if !readCacheOk {
+				simpleRes.Data = dto.Program{}
+				return simpleRes
+			}
+		} else {
+			readCacheOk = true
+			// 抓到就暂存（当天有效）。
+			if raw, mErr := json.Marshal(jsonMap); mErr == nil {
+				if sErr := until.StageEpgCntv(name, "svc", raw); sErr != nil {
+					log.Println("CNTV暂存失败:", sErr)
+				}
+			}
+			if dao.Cache.SetJSON(cacheKey, jsonMap) != nil {
+				dao.Cache.Delete(cacheKey)
+			}
 		}
 	}
 

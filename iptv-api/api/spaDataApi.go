@@ -7,8 +7,6 @@ import (
 	"iptv-api/dto"
 	"iptv-api/service"
 	"iptv-api/until"
-	"os"
-	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -191,29 +189,6 @@ func ClientMyTVData(c *gin.Context) {
 	}
 
 	c.JSON(200, service.MytvApkInfo())
-}
-
-// AboutData 对应后台「升级日志」页：渲染 /app/ChangeLog.md 原文。
-func AboutData(c *gin.Context) {
-	_, ok := until.GetAuthName(c)
-	if !ok {
-		c.JSON(200, dto.NewAdminRedirectDto())
-		return
-	}
-
-	data, _ := os.ReadFile("/app/ChangeLog.md")
-	content := string(data)
-	// 原文里写的是相对路径（./static/…、./ChangeLog.md），页面深度一变就 404，
-	// 统一补前导 /。
-	re := regexp.MustCompile(`\./static`)
-	content = re.ReplaceAllString(content, "/static")
-	re = regexp.MustCompile(`\./ChangeLog.md`)
-	content = re.ReplaceAllString(content, "/ChangeLog.md")
-
-	c.JSON(200, gin.H{
-		"title":   "升级日志",
-		"content": content,
-	})
 }
 
 // UpdataData 对应 html.Updata —— 管理系统与引擎各自的当前版本号。

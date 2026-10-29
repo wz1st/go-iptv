@@ -85,6 +85,10 @@ type ClientNeedAuthorReq struct {
 	NeedAuthor int64 `json:"needAuthor"`
 }
 
+type ClientForceUpdateReq struct {
+	ForceUpdate int64 `json:"forceUpdate"`
+}
+
 type ClientAppInfoReq struct {
 	ServerUrl string `json:"serverUrl"`
 	AppName   string `json:"appName"`

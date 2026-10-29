@@ -24,21 +24,24 @@ func MytvGetUserM3U8(ts, deviceId, clientIP, host string) string {
 	user = SaveUser(user)
 	keySeed := ts + deviceId
 
-	data, err := until.AESEncrypt(until.MytvM3u8(user.MealID, deviceId, host), keySeed)
+	data, err := until.AESEncrypt(until.EnsureMytvSubM3u8(user.MealID, deviceId, host), keySeed)
 	if err != nil {
 		log.Println("mytv订阅加密失败: ", err)
 	}
 	return data
 }
 
-// MytvGetRssEpg 返回该设备所属套餐的「聚合节目单缓存文件路径」，由 handler 流式直发。
-func MytvGetRssEpg(deviceId string) (string, bool) {
+// MytvGetRssEpg 返回该设备所属套餐的聚合节目单。
+//
+// 同 GetRssEpg：缓存不可用时 path 为空但 body 仍有现场算出的内容，
+// handler 必须优先发 body，不能发空节目单。
+func MytvGetRssEpg(deviceId string) (string, []byte, bool) {
 	var dbUser models.IptvUser
 	res := dao.DB.Where("device_id = ?", deviceId).First(&dbUser)
 	if res.RowsAffected == 0 {
-		return "", false
+		return "", nil, false
 	}
-	return until.GetEpgPath(dbUser.MealID)
+	return until.EnsureMealEpgPayload(dbUser.MealID)
 }
 
 func SaveUser(user models.IptvUser) models.IptvUser {

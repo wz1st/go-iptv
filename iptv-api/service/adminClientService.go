@@ -149,6 +149,18 @@ func SetNeedAuthor(req dto.ClientNeedAuthorReq) dto.ReturnJsonDto {
 	return dto.ReturnJsonDto{Code: 1, Msg: "授权设置成功", Type: "success"}
 }
 
+// SetForceUpdate 设置「强制更新」开关：开启后 APK 发现新版本弹不可取消的更新框。
+// 与 SetNeedAuthor 同构：0/1 校验、落 config.yml、两壳共用同一份配置。
+func SetForceUpdate(req dto.ClientForceUpdateReq) dto.ReturnJsonDto {
+	if req.ForceUpdate != 0 && req.ForceUpdate != 1 {
+		return dto.ReturnJsonDto{Code: 0, Msg: "参数错误", Type: "danger"}
+	}
+	cfg := dao.GetConfig()
+	cfg.App.ForceUpdate = req.ForceUpdate
+	dao.SetConfig(cfg)
+	return dto.ReturnJsonDto{Code: 1, Msg: "强制更新设置成功", Type: "success"}
+}
+
 // TestServerURL 探测用户在后台填的「APK连接地址」是否真的可达。
 //
 // **测什么**：打客户端登录时用的那个路由（清和壳 /apk/getver，骆驼壳 /apk/lt/getver），

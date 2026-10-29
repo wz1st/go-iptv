@@ -29,7 +29,7 @@ func Proxy(req dto.EngineProxyReq) dto.ReturnJsonDto {
 
 		dao.SetConfig(cfg)
 		dao.WS.SendWS(dao.Request{Action: "stopProxy"})
-		go until.CleanAutoCacheAll() // 订阅里带 purl，开关一变缓存就得作废
+		go until.InvalidateAutoCategoryCaches() // 订阅里带 purl，开关一变缓存就得作废
 		return dto.ReturnJsonDto{Code: 1, Msg: "已关闭中转", Type: "success"}
 	}
 
@@ -63,7 +63,7 @@ func Proxy(req dto.EngineProxyReq) dto.ReturnJsonDto {
 
 	cfg.Proxy.Status = 1
 	dao.SetConfig(cfg)
-	go until.CleanAutoCacheAll() // purl 变了，订阅缓存必须作废
+	go until.InvalidateAutoCategoryCaches() // purl 变了，订阅缓存必须作废
 	return dto.ReturnJsonDto{Code: 1, Msg: "启动成功，可以到频道分组管理中开启中转啦", Type: "success"}
 }
 
@@ -91,6 +91,15 @@ func AutoRes(req dto.EngineSwitchReq) dto.ReturnJsonDto {
 	}
 	cfg.Resolution.Auto = boolToInt64(req.Enable)
 	dao.SetConfig(cfg)
+	// 关掉开关 = 立刻终止引擎侧正在跑的全量识别：
+	// 只改配置的话，引擎那一轮照跑不误（CPU/内存照吃），"已关闭"就成了假象。
+	if !req.Enable {
+		if _, err := dao.WS.SendWS(dao.Request{Action: "stopTestResolution"}); err != nil {
+			log.Println("关闭自动识别：通知引擎停止测试失败:", err)
+		} else {
+			log.Println("关闭自动识别：已通知引擎停止正在进行的分辨率测试")
+		}
+	}
 	return dto.ReturnJsonDto{Code: 1, Msg: "设置成功", Type: "success"}
 }
 
@@ -116,6 +125,62 @@ func EpgFuzz(req dto.EngineSwitchReq) dto.ReturnJsonDto {
 	cfg.Epg.Fuzz = boolToInt64(req.Enable)
 	dao.SetConfig(cfg)
 	return dto.ReturnJsonDto{Code: 1, Msg: "设置成功", Type: "success"}
+}
+
+// AutoResRun 立即执行一次全量分辨率/延迟识别（开关已开时可用）。
+// 任务由引擎跑（耗时较长、CPU 占用高），接口只负责"点火"并立刻返回，
+// 不等它跑完 —— 前端据此提示"已开始执行"。
+//
+// ★CPU/内存的调控**全部在引擎侧**：引擎自己按剩余资源动态调整在测数量
+// （见 iptv-engine/service/resolutionService.go 的动态闸门）。
+// api 侧既不采样资源、也不叫停引擎任务 —— 那是引擎自己的事。
+func AutoResRun() dto.ReturnJsonDto {
+	cfg := dao.GetConfig()
+	if !dao.LicStillValid() {
+		return dto.ReturnJsonDto{Code: 0, Msg: "未授权", Type: "danger"}
+	}
+	if cfg.Resolution.Auto != 1 {
+		return dto.ReturnJsonDto{Code: 0, Msg: "请先开启「自动识别」开关", Type: "warning"}
+	}
+
+	res, err := dao.WS.SendWS(dao.Request{Action: "testResolutionAll"})
+	if err != nil {
+		return dto.ReturnJsonDto{Code: 0, Msg: "引擎连接失败: " + err.Error(), Type: "danger"}
+	}
+	if res.Code != 1 {
+		return dto.ReturnJsonDto{Code: 0, Msg: "启动失败: " + res.Msg, Type: "danger"}
+	}
+	// 分辨率识别会改写频道数据，套餐聚合节目单必须作废
+	// （这里不再触发测速：测速就是本函数发起的，重复触发没有意义）。
+	go until.InvalidateAllMealEpgCachesAndRebuild()
+	return dto.ReturnJsonDto{
+		Code: 1,
+		Msg:  "已开始执行全量分辨率与延迟识别，引擎会按当前剩余 CPU/内存自动调整在测数量",
+		Type: "success",
+	}
+}
+
+// EpgFuzzRun 立即执行一次 EPG 模糊识别：让引擎按模糊规则重跑"频道↔节目单"匹配。
+// 引擎跑完会回写绑定关系，随后清一次套餐节目单缓存。
+func EpgFuzzRun() dto.ReturnJsonDto {
+	cfg := dao.GetConfig()
+	if !dao.LicStillValid() {
+		return dto.ReturnJsonDto{Code: 0, Msg: "未授权", Type: "danger"}
+	}
+	if cfg.Epg.Fuzz != 1 {
+		return dto.ReturnJsonDto{Code: 0, Msg: "请先开启「EPG模糊识别」开关", Type: "warning"}
+	}
+	res, err := dao.WS.SendWS(dao.Request{Action: "checkChEpg"})
+	if err != nil {
+		return dto.ReturnJsonDto{Code: 0, Msg: "引擎连接失败: " + err.Error(), Type: "danger"}
+	}
+	if res.Code != 1 {
+		return dto.ReturnJsonDto{Code: 0, Msg: "执行失败: " + res.Msg, Type: "danger"}
+	}
+	// 模糊匹配会重写"频道 → EPG"绑定关系，影响面无法收敛到某几个分组
+	// ⇒ 走全量收尾：重算绑定 + 作废全部套餐节目单。
+	until.RequestChannelRefresh()
+	return dto.ReturnJsonDto{Code: 1, Msg: "已开始执行 EPG 模糊识别", Type: "success"}
 }
 
 // boolToInt64 把开关量转成配置里的 0/1。
@@ -175,7 +240,7 @@ func EnforceLicenseGate() bool {
 	if _, err := dao.WS.SendWS(dao.Request{Action: "stopProxy"}); err != nil {
 		log.Println("⚠️ 授权失效，通知引擎停止中转失败:", err)
 	}
-	go until.CleanAutoCacheAll() // 中转关了，带 purl 的订阅缓存要作废
+	go until.InvalidateAutoCategoryCaches() // 中转关了，带 purl 的订阅缓存要作废
 
 	log.Println("🔒 授权已失效，已关闭全部进阶功能开关")
 	return true

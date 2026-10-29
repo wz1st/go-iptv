@@ -119,7 +119,9 @@ func AddList(req dto.ChannelsListReq) dto.ReturnJsonDto {
 	doRepeat := req.Dedup
 	iptvCategoryList.Dedup = req.Dedup
 
-	client := &http.Client{}
+	// 抓取走「频道源更新」这一路的代理开关（config.yml 的 out_proxy.use_src）。
+	until.LogProxyUse(until.ProxyUseSrc, url, true)
+	client := &http.Client{Transport: until.OutProxyTransport(until.ProxyUseSrc)}
 	httpReq, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "获取频道列表失败-创建请求错误:" + err.Error(), Type: "danger"}
@@ -217,7 +219,9 @@ func UpdateList(req dto.ReqID) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "频道列表不存在", Type: "danger"}
 	}
 
-	client := &http.Client{}
+	// 抓取走「频道源更新」这一路的代理开关（config.yml 的 out_proxy.use_src）。
+	until.LogProxyUse(until.ProxyUseSrc, iptvCategoryList.Url, true)
+	client := &http.Client{Transport: until.OutProxyTransport(until.ProxyUseSrc)}
 	httpReq, err := http.NewRequest("GET", iptvCategoryList.Url, nil)
 	if err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "获取频道列表失败-创建请求错误:" + err.Error(), Type: "danger"}
@@ -343,7 +347,8 @@ func DelList(req dto.ReqID) dto.ReturnJsonDto {
 	}
 	dao.DB.Where("source_id = ?", iptvCategoryList.ID).Delete(&models.IptvCategory{})
 	dao.DB.Where("source_id = ?", iptvCategoryList.ID).Delete(&models.IptvChannel{})
-	go until.CleanMealsCacheAllRebuild() // 删除缓存
+	// 这个源下的分组全没了 ⇒ 受影响的套餐就是"引用了这些分组"的那些。
+	go until.RequestChannelRefreshFor(ids...)
 	return dto.ReturnJsonDto{Code: 1, Msg: fmt.Sprintf("删除列表 %s 成功\n", iptvCategoryList.Name), Type: "success"}
 }
 
@@ -361,7 +366,7 @@ func DelCa(req dto.ReqID) dto.ReturnJsonDto {
 	dao.DB.Model(&models.IptvCategory{}).Where("id = ?", category.ID).Delete(&models.IptvCategory{})
 	dao.DB.Model(&models.IptvChannel{}).Where("category_id = ?", category.ID).Delete(&models.IptvChannel{})
 	go until.RemoveCaFromEpg(category.ID)
-	go until.CleanAutoCacheAllRebuild()
+	go until.RequestChannelRefreshFor(category.ID)
 	return dto.ReturnJsonDto{Code: 1, Msg: fmt.Sprintf("删除频道 %s 成功\n", category.Name), Type: "success"}
 }
 
@@ -385,7 +390,8 @@ func SortCategory(req dto.ChannelsCaSortReq) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "保存排序失败", Type: "danger"}
 	}
 
-	go until.CleanMealsRssCacheAll()
+	// 排序只改频道顺序，不改内容 ⇒ 只作废"引用了这些分组"的订阅缓存。
+	go until.InvalidateMealSubscriptionCachesByCategoryIds(req.IDs)
 	return dto.ReturnJsonDto{Code: 1, Msg: "排序已保存", Type: "success"}
 }
 
@@ -417,7 +423,8 @@ func SortChannels(req dto.ChannelsChSortReq) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "保存排序失败", Type: "danger"}
 	}
 
-	go until.CleanMealsRssCacheAll()
+	// 排序只改频道顺序，不改内容 ⇒ 只作废"引用了该分组"的订阅缓存。
+	go until.InvalidateMealSubscriptionCachesByCategoryIds([]int64{req.CaID})
 	return dto.ReturnJsonDto{Code: 1, Msg: "排序已保存", Type: "success"}
 }
 
@@ -441,7 +448,9 @@ func ImportChannels(req dto.ChannelsImportReq) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "保存失败: " + err.Error(), Type: "danger"}
 	}
 
-	go until.CleanMealsRssCacheAll()
+	// 频道内容变了 ⇒ 走统一的收尾出口（作废聚合缓存 → 重算 EPG 绑定 →
+	// 只作废/重建引用了该分组的套餐）。
+	go until.RequestChannelRefreshFor(req.CaID)
 
 	msg := "保存成功"
 	if repet > 0 {
@@ -469,7 +478,9 @@ func SaveCategoryFlag(req dto.ChannelsCaFlagReq) dto.ReturnJsonDto {
 	}
 
 	dao.Cache.Delete("proxyCaCheck_" + strconv.FormatInt(req.ID, 10))
-	go until.CleanAutoCacheAll()
+	// 分组开关（中转访问 / 频道重命名）只影响这个分组 ⇒ 只作废引用了它的套餐缓存。
+	go until.InvalidateMealSubscriptionCachesByCategoryIds([]int64{req.ID})
+	go until.InvalidateAutoCategoryFiles()
 
 	return dto.ReturnJsonDto{Code: 1, Msg: "操作成功", Type: "success"}
 }
@@ -523,7 +534,8 @@ func SaveChannelsOne(req dto.ChannelsOneReq) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "保存频道失败" + err.Error(), Type: "danger"}
 	}
 
-	go until.CleanAutoCacheAllRebuild() // 清理缓存
+	// 改了频道名/地址/EPG 绑定 ⇒ 走统一收尾出口（重算绑定 + 作废受影响套餐）。
+	go until.RequestChannelRefreshFor(channel.CategoryID)
 	return dto.ReturnJsonDto{Code: 1, Msg: "保存成功", Type: "success"}
 }
 
@@ -602,7 +614,10 @@ func CategoryListChangeStatus(req dto.ReqID) dto.ReturnJsonDto {
 		dao.DB.Model(&models.IptvCategoryList{}).Where("id = ?", cateData.ID).Update("enable", 1)
 		dao.DB.Model(&models.IptvCategory{}).Where("source_id = ?", cateData.ID).Update("enable", 1)
 	}
-	go until.CleanAutoCacheAllRebuild()
+	// 源启停 ⇒ 该源下所有分组都受影响。
+	var caIds []int64
+	dao.DB.Model(&models.IptvCategory{}).Where("source_id = ?", cateData.ID).Pluck("id", &caIds)
+	go until.RequestChannelRefreshFor(caIds...)
 	return dto.ReturnJsonDto{Code: 1, Msg: "源 " + cateData.Name + "状态修改成功", Type: "success"}
 }
 
@@ -624,7 +639,7 @@ func CategoryChangeStatus(req dto.ReqID) dto.ReturnJsonDto {
 		dao.DB.Model(&models.IptvCategory{}).Where("id = ?", cateData.ID).Update("enable", 1)
 		dao.DB.Model(&models.IptvChannel{}).Where("category_id = ?", cateData.ID).Update("status", 1)
 	}
-	go until.CleanAutoCacheAllRebuild()
+	go until.RequestChannelRefreshFor(cateData.ID)
 	return dto.ReturnJsonDto{Code: 1, Msg: "分类 " + cateData.Name + "状态修改成功", Type: "success"}
 }
 
@@ -649,7 +664,7 @@ func ChannelsChangeStatus(req dto.ChannelsStatusReq) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "状态修改失败", Type: "danger"}
 	}
 
-	go until.CleanAutoCacheAllRebuild()
+	go until.RequestChannelRefreshFor(chData.CategoryID)
 
 	action := "已停用"
 	if req.Status {
@@ -674,8 +689,7 @@ func DeleteChannel(req dto.ReqID) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "删除失败", Type: "danger"}
 	}
 
-	go until.CleanAutoCacheAllRebuild()
-	go until.CleanMealsRssCacheAll()
+	go until.RequestChannelRefreshFor(chData.CategoryID)
 	return dto.ReturnJsonDto{Code: 1, Msg: "频道 " + chData.Name + " 已删除", Type: "success"}
 }
 
@@ -791,7 +805,8 @@ func SaveCategory(req dto.ChannelsCategoryReq) dto.ReturnJsonDto {
 		}
 		dao.DB.Model(&models.IptvCategory{}).Create(&new)
 		if strings.Contains(new.Type, "auto") {
-			go until.CleanAutoCacheAllRebuild()
+			// 聚合分组的频道由引擎按规则生成 ⇒ 作废聚合缓存 + 重算绑定。
+			go until.RequestChannelRefreshFor(new.ID)
 		} else {
 			until.SyncCaToEpg(new.ID)
 		}
@@ -852,14 +867,16 @@ func SaveCategory(req dto.ChannelsCategoryReq) dto.ReturnJsonDto {
 
 		if strings.Contains(ca.Type, "auto") {
 			go until.RemoveCaFromEpg(caIdInt)
-			go until.CleanAutoCacheAll()
+			// 聚合分组的规则/类型变了 ⇒ 聚合缓存作废 + 绑定重算。
+			go until.RequestChannelRefreshFor(caIdInt)
 		} else {
 			// 普通分组也要清**聚合**缓存：聚合分组会把来源分组的 UA 带进
 			// "这条链接要不要继续走中转"的判据（引擎 aggregateNeedsProxy），
 			// 只清订阅缓存会让改完 UA 的聚合分组一直用旧结果 ——
 			// 现象是"分组里改了 UA，聚合分组里那条链接的中转/直连还是老样子"。
-			// CleanAutoCacheAll 内部已经包含 CleanMealsRssCacheAll，不必再单独调。
-			go until.CleanAutoCacheAll()
+			go until.InvalidateAutoCategoryFiles()
+			// 只作废"引用了该分组"的套餐订阅缓存。
+			go until.InvalidateMealSubscriptionCachesByCategoryIds([]int64{caIdInt})
 		}
 	}
 	return dto.ReturnJsonDto{Code: 1, Msg: "操作成功", Type: "success"}

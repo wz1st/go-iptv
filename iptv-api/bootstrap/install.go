@@ -50,6 +50,11 @@ func Install() (bool, string) {
 		log.Println("删除/cache文件夹失败:", err)
 		return false, err.Error()
 	}
+	// EPG 源下载物的暂存区：重装要一并清掉（否则会留着上一个库的源数据）。
+	if err := os.RemoveAll(until.EpgStageDir); err != nil {
+		log.Println("删除EPG暂存目录失败:", err)
+		return false, err.Error()
+	}
 	if err := os.RemoveAll("/config/iptv.db"); err != nil {
 		log.Println("删除iptv.db文件失败:", err)
 		return false, err.Error()
@@ -74,7 +79,7 @@ func Install() (bool, string) {
 	cmd := exec.Command("bash", "-c",
 		"mkdir -p /config/images/icon && mkdir -p /config/images/bj"+
 			" && mkdir -p /config/images/lt/icon && mkdir -p /config/images/lt/bj"+
-			" && mkdir -p /config/cache")
+			" && mkdir -p /config/cache && mkdir -p "+until.EpgStageDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Println("创建/config子文件夹失败", err, string(output))
@@ -123,7 +128,6 @@ func Install() (bool, string) {
 		log.Println("对齐数据库表结构失败:", err)
 		return false, "对齐数据库表结构失败: " + err.Error()
 	}
-	log.Println("初始化EPG缓存...")
 	cache, err := dao.NewFileCache("/tmp/cache/", true)
 	if err != nil {
 		log.Println("初始化缓存失败:", err)

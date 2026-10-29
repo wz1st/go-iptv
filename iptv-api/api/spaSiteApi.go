@@ -30,6 +30,8 @@ func SiteBootData(c *gin.Context) {
 		"lic_logged": licLogged(),
 		"author":     cfgAuthor(),
 		"installed":  bootstrap.IsInstalled(),
+		// guide_ack：使用说明是否已被管理员确认。未确认时进后台会被引导页锁定。
+		"guide_ack": guideAck(),
 	})
 }
 
@@ -169,6 +171,45 @@ func readDocFile(path string) string {
 		return ""
 	}
 	return string(data)
+}
+
+// guideAck 返回使用说明是否已被确认。
+// 标记文件 /config/guide_ack 内容为 "1" 表示已确认；文件不存在或内容不是 "1"
+// （旧版本升级上来、尚未初始化）一律按"未确认"处理 —— 进后台会被引导页锁定，
+// 直到管理员在「使用说明」页点「我已知晓系统使用方法」。
+func guideAck() bool {
+	data, err := os.ReadFile("/config/guide_ack")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(data)) == "1"
+}
+
+// GuideData 对应后台「使用说明」页：渲染 /app/Guide.md 原文（与升级日志同机制）。
+// 文档里直接写绝对路径（/static/guide/…）的图片地址，页面深度变化也不会 404。
+func GuideData(c *gin.Context) {
+	if _, ok := until.GetAuthName(c); !ok {
+		c.JSON(200, dto.NewAdminRedirectDto())
+		return
+	}
+	data, _ := os.ReadFile("/app/Guide.md")
+	c.JSON(200, gin.H{
+		"title":   "使用说明",
+		"content": string(data),
+	})
+}
+
+// GuideAck 对应「使用说明」页尾的「我已知晓」按钮：写入确认标记（持久化到 /config）。
+func GuideAck(c *gin.Context) {
+	if _, ok := until.GetAuthName(c); !ok {
+		c.JSON(200, dto.NewAdminRedirectDto())
+		return
+	}
+	if err := os.WriteFile("/config/guide_ack", []byte("1"), 0644); err != nil {
+		c.JSON(200, gin.H{"code": 0, "msg": "保存失败：" + err.Error(), "type": "danger"})
+		return
+	}
+	c.JSON(200, gin.H{"code": 1, "msg": "已确认，即将进入系统", "type": "success"})
 }
 
 // 初始化安装的默认管理员账号 —— 用户名与密码都是 test。

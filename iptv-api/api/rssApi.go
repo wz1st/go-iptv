@@ -172,8 +172,8 @@ func GetRssEpgShortURL(c *gin.Context) {
 		c.String(200, "参数错误4")
 		return
 	}
-	path, ok := service.GetRssEpg(token)
-	serveEpgFile(c, path, ok)
+	path, body, ok := service.GetRssEpg(token)
+	serveEpgFile(c, path, body, ok)
 }
 
 // GetRssEpg 处理获取TXT格式RSS EPG的请求
@@ -191,8 +191,8 @@ func GetRssEpg(c *gin.Context) {
 		return
 	}
 
-	path, ok := service.GetRssEpg(token)
-	serveEpgFile(c, path, ok)
+	path, body, ok := service.GetRssEpg(token)
+	serveEpgFile(c, path, body, ok)
 }
 
 func GetClientScheme(c *gin.Context) string {

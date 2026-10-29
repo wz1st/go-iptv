@@ -73,20 +73,6 @@ func TestGetStructRejectsNonPointer(t *testing.T) {
 	}
 }
 
-// TestCNTVCacheKeyIsCaseAndSpaceInsensitive 缓存键必须与调用方传入的大小写无关。
-func TestCNTVCacheKeyIsCaseAndSpaceInsensitive(t *testing.T) {
-	want := "cntv_cctv1"
-	for _, in := range []string{"cctv1", "CCTV1", "Cctv1", "  cctv1  ", "\tcctv1"} {
-		if got := CNTVCacheKey(in); got != want {
-			t.Errorf("CNTVCacheKey(%q) = %q，应为 %q", in, got, want)
-		}
-	}
-	// 不同频道不能撞键。
-	if CNTVCacheKey("cctv1") == CNTVCacheKey("cctv13") {
-		t.Fatal("不同频道不应得到相同缓存键")
-	}
-}
-
 // TestCacheSetIsAtomicConcurrentRead 并发读不应读到半截 JSON。
 func TestCacheSetIsAtomicConcurrentRead(t *testing.T) {
 	c := newTestCache(t)

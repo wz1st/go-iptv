@@ -28,11 +28,11 @@ func MealsChangeStatus(req dto.ReqID) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: mealMissingMsg(mealId), Type: "danger"}
 	}
 	if meals.Status {
-		go until.CleanMealsCacheOne(meals.ID)
+		go until.InvalidateMealCaches(meals.ID)
 		dao.DB.Model(&models.IptvMeals{}).Where("id = ?", meals.ID).Update("status", 0)
 		return dto.ReturnJsonDto{Code: 1, Msg: "套餐 " + meals.Name + " 下线", Type: "success"}
 	}
-	go until.CleanMealsCacheOne(meals.ID)
+	go until.InvalidateMealCaches(meals.ID)
 	dao.DB.Model(&models.IptvMeals{}).Where("id = ?", meals.ID).Update("status", 1)
 	return dto.ReturnJsonDto{Code: 1, Msg: "套餐 " + meals.Name + " 上线", Type: "success"}
 }
@@ -93,7 +93,9 @@ func MealsDel(req dto.ReqID) dto.ReturnJsonDto {
 	if err := dao.DB.Where("id = ?", mealId).Delete(&models.IptvMeals{}).Error; err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "删除失败", Type: "danger"}
 	}
-	go until.CleanMealsXmlCacheOne(mealId)
+	// 套餐没了 ⇒ 它对应的节目单缓存必须删掉（下次访问时 Ensure* 会因查不到套餐而不重建）。
+	go until.InvalidateMealEpgCache(mealId)
+	go until.InvalidateMealSubscriptionCaches([]int64{mealId})
 	return dto.ReturnJsonDto{Code: 1, Msg: "删除成功", Type: "success"}
 }
 
@@ -113,7 +115,7 @@ func MealsSubmit(req dto.MealsSaveReq) dto.ReturnJsonDto {
 		if err := dao.DB.Create(&iptvMeals).Error; err != nil {
 			return dto.ReturnJsonDto{Code: 0, Msg: "添加失败", Type: "danger"}
 		}
-		go until.CleanMealsCacheRebuildOne(iptvMeals.ID)
+		go until.InvalidateMealCaches(iptvMeals.ID)
 		return dto.ReturnJsonDto{Code: 1, Msg: "添加成功", Type: "success"}
 	}
 
@@ -126,7 +128,7 @@ func MealsSubmit(req dto.MealsSaveReq) dto.ReturnJsonDto {
 	if err := dao.DB.Save(&iptvMeals).Error; err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "编辑失败", Type: "danger"}
 	}
-	go until.CleanMealsCacheRebuildOne(iptvMeals.ID)
+	go until.InvalidateMealCaches(iptvMeals.ID)
 	return dto.ReturnJsonDto{Code: 1, Msg: "编辑成功", Type: "success"}
 }
 

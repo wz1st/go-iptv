@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"iptv-api/dto"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,18 +104,6 @@ type ClientBuildValues struct {
 	Shell string
 }
 
-// apktoolLowArgs 是低资源环境下的 apktool 参数。
-// 与旧 build.go 逐字一致：编译基底比编整棵树轻，但 dex 合并阶段同样吃内存。
-var apktoolLowArgs = []string{
-	"-JXmx128M",
-	"-JXX:+UseParallelGC",
-	"-JXX:+UseStringDeduplication",
-	"-JXX:ParallelGCThreads=2",
-	"-JDfile.encoding=utf-8",
-	"-JDjdk.util.zip.disableZip64ExtraFieldValidation=true",
-	"-JDjdk.nio.zipfs.allowDotZipEntry=true",
-}
-
 // BuildClientApk 从基底 APK 编译出一份新 APK。
 //
 // 流程：解包基底 → 改三个资源 + 图标/背景 → apktool 重编 → 对齐签名。
@@ -124,6 +113,16 @@ var apktoolLowArgs = []string{
 func BuildClientApk(baseApk, outApk, workDir string, v ClientBuildValues) error {
 	if err := validateClientValues(v); err != nil {
 		return err
+	}
+
+	// 编译前先算资源预算（可用内存 / CPU 占用率 / 核数）。
+	// apktool 与 apksigner 都是 JVM，不设上限时堆上限按物理内存的 1/4 算 ——
+	// 小内存机器上这一步会把系统可用内存抽干，连本服务一起被 OOM Killer 干掉，
+	// 表现为「点了编译按钮、整个后台没响应」。算法见 buildBudget.go。
+	budget := PlanBuildBudget(IsLowResource() || os.Getenv("LOWOS") == "true")
+	log.Printf("%s", budget)
+	if !budget.Ok() {
+		return fmt.Errorf("系统内存不足，已终止编译：%s", budget.Reason)
 	}
 	if err := os.MkdirAll(filepath.Dir(outApk), 0755); err != nil {
 		return fmt.Errorf("apk 输出目录创建失败: %v", err)
@@ -159,15 +158,11 @@ func BuildClientApk(baseApk, outApk, workDir string, v ClientBuildValues) error 
 		return err
 	}
 
-	args := []string{"b", workDir, "-o", outApk}
-	if IsLowResource() || os.Getenv("LOWOS") == "true" {
-		args = append(apktoolLowArgs, args...)
-	}
-	if out, err := runTool("apktool", args...); err != nil {
+	if out, err := runToolEnv(budget.JavaEnv(), "apktool", "b", workDir, "-o", outApk); err != nil {
 		return fmt.Errorf("编译 APK 失败: %v\n%s", err, out)
 	}
 
-	if err := signClientApk(outApk, v.Shell); err != nil {
+	if err := signClientApk(outApk, v.Shell, budget); err != nil {
 		return err
 	}
 	return nil
@@ -292,9 +287,19 @@ func rewriteClientResources(workDir string, v ClientBuildValues) error {
 //
 // ## 为什么替换后还要再扫一遍
 //
-// 替换只认「像地址的串」，一旦基底换了地址形态而这里没跟上，就会再次退化成
-// 「命中 0 或命中错串」。所以替换后再全量扫一遍：还有形如地址却没被换掉的
-// const-string 就直接报错，把「编出一个指向别处的包」挡在编译阶段。
+// 替换正则认 `const-string` 与 `const-string/jumbo` 两种宽度（长地址在 dex 里
+// 常被解码成 jumbo）。但基底地址仍可能以本函数没覆盖到的写法出现（例如换了
+// 路径规则、或 apktool 用了别的解码形态），一旦这里没跟上，就会退化成
+// 「命中 0 或命中错串」。所以替换后再用 findUnpatchedHostLiterals 全量扫一遍
+// （它才是超集）：还有形如地址却没被换掉、且不以新 host 打头的 const-string 就
+// 直接报错，把「编出一个指向别处的包」挡在编译阶段。
+// ## 命中数必须按「正则匹配到」算，不能按「替换后字节变了」算
+//
+// 基底是 CI 打好地址的成品包：若本次注入地址与基底里写死的地址**逐字相同**
+// （生产上最常见 —— 页面就填基底里那个站点），替换是恒等变换，字节完全不变。
+// 按字节变化计数会把「注入点明明在这儿」误判成「一个注入点都没找到」，
+// 编译直接失败，报错还指向「这不是一份可注入的基底」，把人引向换基底的方向
+// （2026-10-20 生产 v4.7.1 + 0.33.0 基底 + 同址注入即此坑）。
 func patchClientHostInSmali(workDir, serverURL string) error {
 	host := strings.TrimRight(strings.TrimSpace(serverURL), "/")
 	if host == "" {
@@ -304,7 +309,13 @@ func patchClientHostInSmali(workDir, serverURL string) error {
 	repl := strings.ReplaceAll(host, "$", "$$")
 	// ${1} 是 const-string 的寄存器与引号部分；地址本体整条换成 host，
 	// 后面跟的 /getepg、/weather 之类后缀原样保留。
-	re := regexp.MustCompile(`(const-string\s+[vp]\d+,\s*")https?://[^\s"]*?/(?:iptv|apk/lt)`)
+	//
+	// ★ 必须同时认 `const-string` 与 `const-string/jumbo`：长地址在 dex 里常被
+	// 解码成 jumbo 指令（串索引越过 0xFFFF 时 apktool 即吐 jumbo），若只认
+	// const-string 就会一个真地址都匹配不到、命中数 0 ⇒ 编译失败。反向断言那
+	// 条正则（findUnpatchedHostLiterals）本来就认 jumbo，这里也必须跟上，否则
+	// 替换面比扫描面窄，正好漏掉 jumbo 形态的真地址。
+	re := regexp.MustCompile(`(const-string(?:/jumbo)?\s+[vp]\d+,\s*")https?://[^\s"]*?/(?:iptv|apk/lt)`)
 	smaliDir := filepath.Join(workDir, "smali")
 	hits := 0
 	err := filepath.WalkDir(smaliDir, func(path string, d os.DirEntry, err error) error {
@@ -318,11 +329,15 @@ func patchClientHostInSmali(workDir, serverURL string) error {
 		if err != nil {
 			return err
 		}
-		out := re.ReplaceAll(data, []byte("${1}"+repl))
-		if bytes.Equal(out, data) {
+		if !re.Match(data) {
 			return nil
 		}
 		hits++
+		out := re.ReplaceAll(data, []byte("${1}"+repl))
+		if bytes.Equal(out, data) {
+			// 注入地址与基底原有地址逐字相同：命中了，但无需落盘。
+			return nil
+		}
 		return os.WriteFile(path, out, 0644)
 	})
 	if err != nil {
@@ -554,7 +569,7 @@ func (v ClientBuildValues) versionName() string {
 //
 // 现在统一走该壳的固定 keystore（持久卷 /config/client/keystore_<shell>.p12），
 // 缺则在安装/首次编译时固定一份，之后所有编译签名一致 ⇒ 覆盖安装成立。
-func signClientApk(apkPath, shell string) error {
+func signClientApk(apkPath, shell string, budget BuildBudget) error {
 	ks, alias, err := EnsureClientKeystore(shell)
 	if err != nil {
 		return err
@@ -595,6 +610,12 @@ func signClientApk(apkPath, shell string) error {
 		"--v2-signing-enabled", "true",
 		"--v3-signing-enabled", "true",
 		apkPath)
+	// apksigner 同样是 JVM，堆上限必须跟着预算走 —— 只限制 apktool 的话，
+	// 签名阶段照样能把系统内存抽干，前面留的 256M 余量等于没留。
+	// 走 JAVA_TOOL_OPTIONS（HotSpot 直接读），不依赖 apksigner 脚本认哪个变量。
+	if env := budget.JavaEnv(); env != nil {
+		sign.Env = append(os.Environ(), env...)
+	}
 	if out, err := sign.CombinedOutput(); err != nil {
 		return fmt.Errorf("签名失败(%s): %v\n%s", apksignerBin(), err, out)
 	}
@@ -628,7 +649,16 @@ func zipalignBin() string {
 // apktool 的报错全在 stdout/stderr，丢���输出就只剩一个 exit code，
 // 排查时等于两眼一抹黑。
 func runTool(name string, args ...string) (string, error) {
+	return runToolEnv(nil, name, args...)
+}
+
+// runToolEnv 与 runTool 相同，但额外注入环境变量 —— 用来给 JVM 进程
+// 传堆上限（JAVA_TOOL_OPTIONS 是 HotSpot 自己读的，不依赖被调程序怎么转发参数）。
+func runToolEnv(env []string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

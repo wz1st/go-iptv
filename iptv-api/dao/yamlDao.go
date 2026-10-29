@@ -147,7 +147,7 @@ func scheduleSave() {
 			log.Println("保存配置文件失败:", err)
 			return
 		}
-		log.Println("全局配置已保存到文件")
+		//log.Println("全局配置已保存到文件")
 
 		// 落盘后立刻下发一次，保证交互延迟最低。
 		go func() {

@@ -242,7 +242,7 @@ RUN sed -i "s|https\?://dl-cdn.alpinelinux.org/alpine|${APK_MIRROR}|g" /etc/apk/
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
 COPY nginx/proxy_params.inc /etc/nginx/conf.d/proxy_params.inc
 
-COPY config.yml README.md dictionary.txt alias.json ChangeLog.md keystore.p12 /app/
+COPY config.yml README.md dictionary.txt alias.json ChangeLog.md Guide.md keystore.p12 /app/
 
 COPY --from=fetch --chmod=0755 /dl/out/iptv /app/iptv
 COPY --from=fetch --chmod=0755 /dl/out/engine /app/engine

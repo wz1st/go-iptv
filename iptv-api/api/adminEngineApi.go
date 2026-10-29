@@ -35,6 +35,18 @@ func EngineAutoRes(c *gin.Context) {
 	reply(c, service.AutoRes(req))
 }
 
+// EngineAutoResRun 立即执行一次全量分辨率与延迟识别（需已开启自动识别）。
+// POST /api/engine/autoResRun
+func EngineAutoResRun(c *gin.Context) {
+	reply(c, service.AutoResRun())
+}
+
+// EngineEpgFuzzRun 立即执行一次 EPG 模糊识别（需已开启模糊识别）。
+// POST /api/engine/epgFuzzRun
+func EngineEpgFuzzRun(c *gin.Context) {
+	reply(c, service.EpgFuzzRun())
+}
+
 // EngineDisCh 频道去重开关。
 // POST /api/engine/disCh  {"enable":true}
 func EngineDisCh(c *gin.Context) {

@@ -314,24 +314,28 @@ func TestPatchClientHostInSmali_RewritesApkLtLiterals(t *testing.T) {
 	}
 }
 
-// 替换完还有「是站点地址、却不是新 host 打头」的 const-string ⇒ 必须报错。
-//
-// 命中的串换了、漏网的串还在，比「一个都没换」更危险：前者看起来成功。
-// 用 const-string/jumbo 构造：替换用的正则不认这个指令宽度，扫描用的认，
-// 于是它就成了「漏网」—— 正是这道断言要拦的那类半新半旧。
-func TestPatchClientHostInSmali_JumboVariantIsFatal(t *testing.T) {
+// 现行基底在 0.32.1 起把地址解码成 const-string/jumbo（串索引越过 0xFFFF）。
+// 替换正则必须同时认 const-string 与 const-string/jumbo，否则一个真地址都
+// 匹配不到、命中数 0 ⇒ 编译失败（服务端报「找不到服务端地址字面量」）。
+func TestPatchClientHostInSmali_JumboVariantIsRewritten(t *testing.T) {
 	work := t.TempDir()
 	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
 		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n")
 	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity.smali",
 		"    const-string/jumbo v0, \"https://iptv.qingh.xyz/apk/lt/getepg\"\n")
 
-	err := patchClientHostInSmali(work, "http://10.10.220.162:18098/apk/lt")
-	if err == nil {
-		t.Fatal("有漏网的地址字面量时必须报错，不能编出半新半旧的包")
+	if err := patchClientHostInSmali(work, "http://10.10.220.162:18098/apk/lt"); err != nil {
+		t.Fatalf("jumbo 地址应当被替换: %v", err)
 	}
-	if !strings.Contains(err.Error(), "iptv.qingh.xyz") {
-		t.Errorf("报错应点名残留字面量，实际: %v", err)
+	jumbo, err := os.ReadFile(filepath.Join(work, "smali", "com", "eztv", "powerful", "PlayerActivity.smali"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(jumbo), `"http://10.10.220.162:18098/apk/lt/getepg"`) {
+		t.Errorf("jumbo 地址未被替换:\n%s", string(jumbo))
+	}
+	if strings.Contains(string(jumbo), "iptv.qingh.xyz") {
+		t.Errorf("旧站点地址残留:\n%s", string(jumbo))
 	}
 }
 
@@ -360,5 +364,40 @@ func TestPatchClientHostInSmali_DollarIsLiteral(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(work, "smali", "com", "eztv", "powerful", "SplashActivity.smali"))
 	if !strings.Contains(string(b), `"http://h/a$b/apk"`) {
 		t.Errorf("$ 未被当字面量:\n%s", string(b))
+	}
+}
+
+// ★ 同址注入：基底是 CI 打好地址的成品包，页面又填了同一个站点。
+// 替换是恒等变换、字节一个不变，早期按「字节是否变化」计命中，于是把
+// 「注入点就在这儿」判成「一个注入点都没找到」，编译失败且报错指向基底。
+// 生产 v4.7.1 + 0.33.0 基底 + 填 https://iptv.qingh.xyz 即踩这个坑。
+func TestPatchClientHostInSmali_SameAddressAsBaseStillCounts(t *testing.T) {
+	work := t.TempDir()
+	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
+		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n")
+	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity.smali",
+		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt/getepg\"\n")
+
+	if err := patchClientHostInSmali(work, "https://iptv.qingh.xyz/apk/lt"); err != nil {
+		t.Fatalf("同址注入必须成功，不能报成找不到注入点: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(work, "smali", "com", "eztv", "powerful", "PlayerActivity.smali"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"https://iptv.qingh.xyz/apk/lt/getepg"`) {
+		t.Errorf("子路径后缀应原样保留:\n%s", string(b))
+	}
+}
+
+// 同址的反面：注入地址**不带**尾斜杠（页面就填站点根）也要能过 ——
+// 地址尾部的 / 被 TrimRight 去掉后与基底逐字相同，仍算命中。
+func TestPatchClientHostInSmali_SameAddressWithTrailingSlash(t *testing.T) {
+	work := t.TempDir()
+	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
+		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n")
+
+	if err := patchClientHostInSmali(work, "https://iptv.qingh.xyz/apk/lt/"); err != nil {
+		t.Fatalf("带尾斜杠的同址注入必须成功: %v", err)
 	}
 }

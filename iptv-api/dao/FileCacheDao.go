@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"encoding/gob"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"time"
 )
 
@@ -18,11 +18,6 @@ type FileCache struct {
 }
 
 var Cache *FileCache
-
-// CNTVCacheKey 是央视（CNTV）接口返回数据的缓存键。
-func CNTVCacheKey(name string) string {
-	return "cntv_" + strings.ToLower(strings.TrimSpace(name))
-}
 
 // NewFileCache 准备缓存目录。
 func NewFileCache(dir string, expireAtZero bool) (*FileCache, error) {
@@ -63,14 +58,34 @@ func expiredAtMidnightSince(modTime, now time.Time) bool {
 	return modTime.In(epgLoc).Before(midnight)
 }
 
+// 本文件所有方法都对 **nil 接收者** 安全（fc == nil 时一律当作"缓存不可用"）。
+//
+// 为什么必须这样：dao.Cache 是进程级全局，理论上任何入口都可能先碰到它
+// （未安装态的安装接口、缓存目录建不出来的降级启动……）。
+// 只要有一处 `dao.Cache.Exists(...)` 在 nil 上取字段，整条请求就 panic，
+// 表现为接口 500 或空白 —— 而缓存只是**加速手段**，它坏了不该影响正确性。
+// 统一约定：缓存不可用 ⇒ 读路径现场重算、写路径静默丢弃。
+
+// SaveErr 是"缓存不可用"的统一错误，供写路径判定。
+var SaveErr = errors.New("缓存不可用")
+
+// ready 报告缓存是否可用。
+func (fc *FileCache) ready() bool { return fc != nil && fc.Dir != "" }
+
 // 保存缓存（字节）
 func (fc *FileCache) Set(key string, data []byte) error {
+	if !fc.ready() {
+		return SaveErr
+	}
 	path := filepath.Join(fc.Dir, key)
 	return writeFileAtomic(path, data, 0644)
 }
 
 // 读取缓存（字节）
 func (fc *FileCache) Get(key string) ([]byte, error) {
+	if !fc.ready() {
+		return nil, SaveErr
+	}
 	path := filepath.Join(fc.Dir, key)
 
 	info, err := os.Stat(path)
@@ -88,6 +103,9 @@ func (fc *FileCache) Get(key string) ([]byte, error) {
 }
 
 func (fc *FileCache) GetNotExpired(key string) ([]byte, error) {
+	if !fc.ready() {
+		return nil, SaveErr
+	}
 	path := filepath.Join(fc.Dir, key)
 
 	_, err := os.Stat(path)
@@ -100,6 +118,9 @@ func (fc *FileCache) GetNotExpired(key string) ([]byte, error) {
 
 // 判断缓存是否存在
 func (fc *FileCache) Exists(key string) bool {
+	if !fc.ready() {
+		return false
+	}
 	path := filepath.Join(fc.Dir, key)
 	info, err := os.Stat(path)
 	if err != nil {
@@ -115,6 +136,9 @@ func (fc *FileCache) Exists(key string) bool {
 
 // 判断缓存是否存在（忽略过期，用于配合Fresh 自行判定）
 func (fc *FileCache) ChannelExists(key string) bool {
+	if !fc.ready() {
+		return false
+	}
 	path := filepath.Join(fc.Dir, key)
 	_, err := os.Stat(path)
 	return err == nil
@@ -129,6 +153,9 @@ func (fc *FileCache) ChannelExists(key string) bool {
 //
 // 所以简单接口改走本方法：ttl 到点就重新拉，不拿旧的在播状态顶。
 func (fc *FileCache) Fresh(key string, ttl time.Duration) bool {
+	if !fc.ready() {
+		return false
+	}
 	path := filepath.Join(fc.Dir, key)
 	info, err := os.Stat(path)
 	if err != nil {
@@ -142,6 +169,9 @@ func (fc *FileCache) Fresh(key string, ttl time.Duration) bool {
 
 // 删除缓存
 func (fc *FileCache) Delete(pattern string) error {
+	if !fc.ready() {
+		return SaveErr
+	}
 	fullPattern := filepath.Join(fc.Dir, pattern)
 
 	matches, err := filepath.Glob(fullPattern)
@@ -159,6 +189,9 @@ func (fc *FileCache) Delete(pattern string) error {
 
 // 清空所有缓存
 func (fc *FileCache) Clear() error {
+	if !fc.ready() {
+		return SaveErr
+	}
 	files, err := os.ReadDir(fc.Dir)
 	if err != nil {
 		return err

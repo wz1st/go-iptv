@@ -79,7 +79,6 @@ func main() {
 		until.Exists("/config/config.yml") &&
 		until.Exists("/config/install.lock"))
 
-	log.Println("初始化EPG缓存...")
 	cache, err := dao.NewFileCache("/tmp/cache/", true)
 	if err != nil {
 		log.Println("初始化缓存失败:", err)
@@ -127,6 +126,12 @@ func main() {
 		return
 	}
 	until.PasswordReset() // 密码重置
+
+	// 在线升级收尾：启动器是"先换文件、再重启本进程"，所以**能启动本身就说明
+	// 文件已替换完毕**。这里把上一轮还停在"进行中"的状态判成完成 ——
+	// 前端升级遮罩正是靠这一步收尾（刷新后轮询到 running 显示遮罩，
+	// 进程重启完再轮询到 done 撤掉）。
+	until.FinishUpdataOnBoot()
 
 	if !bootstrap.InitLogo() {
 		log.Println("logo目录初始化错误")

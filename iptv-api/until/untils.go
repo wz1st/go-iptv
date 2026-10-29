@@ -3,7 +3,6 @@ package until
 import (
 	"crypto/md5"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -76,7 +75,25 @@ func GetUrl(c *gin.Context) string {
 	return protocol + host + modifiedPath
 }
 
+// GetUrlData 直连取一个 URL 的内容。
+//
+// 它是本文件里被用得最广的出口，调用方里既有 EPG 抓取、也有本机回环探测
+// （中转 /status、引擎 :82）和 IP 归属地查询 —— 只有第一类该走代理。
+// 所以这里**固定直连**，要代理的调用方改用 GetUrlDataVia 并指名用途。
 func GetUrlData(url string, ua ...string) string {
+	return getUrlData(url, proxyUseNone, ua...)
+}
+
+// GetUrlDataVia 按用途取 URL 内容：purpose 命中代理开关就走代理，否则直连。
+// 代理见 until/outProxy.go（config.yml 的 out_proxy 段）。
+func GetUrlDataVia(url string, purpose int, ua ...string) string {
+	return getUrlData(url, purpose, ua...)
+}
+
+// proxyUseNone 表示「这一步不该走代理」，与 outProxy.go 的用途常量区分开。
+const proxyUseNone = -1
+
+func getUrlData(url string, purpose int, ua ...string) string {
 	defaultUA := "Go-http-client/1.1"
 	useUA := defaultUA
 
@@ -91,7 +108,16 @@ func GetUrlData(url string, ua ...string) string {
 
 	req.Header.Set("User-Agent", useUA)
 
+	// 出网前先说清走没走代理：抓取失败时日志里只有"请求失败"一行，
+	// 分不清是"代理没生效"还是"代理生效了但源站不可达"。
+	if purpose != proxyUseNone {
+		LogProxyUse(purpose, url, true)
+	}
+
 	client := &http.Client{}
+	if purpose != proxyUseNone {
+		client.Transport = OutProxyTransport(purpose)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Println(url, " 请求失败:", err)
@@ -105,50 +131,6 @@ func GetUrlData(url string, ua ...string) string {
 	}
 
 	return string(body)
-}
-
-func GetIpRegion(ip string) string {
-	city := "局域网"
-	if !isPrivateIP(net.ParseIP(ip)) {
-		return city
-	}
-	url := "https://api.mir6.com/api/ip_json?ip=" + ip
-	jsonStr := GetUrlData(url)
-	var jsonMap map[string]interface{}
-	err := json.Unmarshal([]byte(jsonStr), &jsonMap)
-	if err != nil {
-		return city
-	}
-	if data, ok := jsonMap["data"].(map[string]interface{}); ok {
-		if cityStr, ok := data["location"].(string); ok && cityStr != "" {
-			city = cityStr
-		}
-	}
-	return city
-}
-
-func isPrivateIP(ip net.IP) bool {
-	privateIPBlocks := []*net.IPNet{
-		{
-			IP:   net.IPv4(10, 0, 0, 0),
-			Mask: net.CIDRMask(8, 32),
-		},
-		{
-			IP:   net.IPv4(172, 16, 0, 0),
-			Mask: net.CIDRMask(12, 32),
-		},
-		{
-			IP:   net.IPv4(192, 168, 0, 0),
-			Mask: net.CIDRMask(16, 32),
-		},
-	}
-
-	for _, block := range privateIPBlocks {
-		if block.Contains(ip) {
-			return true
-		}
-	}
-	return false
 }
 
 func DecodeUnicode(s string) string {

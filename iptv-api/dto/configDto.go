@@ -27,6 +27,10 @@ type App struct {
 	NeedAuthor  int64 `mapstructure:"needauthor" json:"needAuthor" yaml:"needauthor"`
 	BuffTimeout int64 `mapstructure:"buff_time_out" json:"buffTimeout" yaml:"buff_time_out"`
 	Decoder     int64 `mapstructure:"decoder" json:"decoder" yaml:"decoder"`
+	// ForceUpdate 是「强制更新」开关：开启后 APK 发现新版本会弹出**不可取消**的更新框，
+	// 不点更新进不去主界面。yaml 键 `forceupdate`、json 键同名 —— 客户端 getver 解析
+	// 只读 `forceupdate`（见 smali g$3）。两个壳共用同一份配置（与 NeedAuthor 同构）。
+	ForceUpdate int64 `mapstructure:"forceupdate" json:"forceUpdate" yaml:"forceupdate"`
 	// TrialDays   int64 `mapstructure:"trialdays" json:"trialdays" yaml:"trialdays"`
 	Update AppUpdate `mapstructure:"update" json:"update" yaml:"update"`
 }
@@ -61,6 +65,34 @@ type Rss struct {
 // Proxy 只剩一个开关。
 type Proxy struct {
 	Status int64 `mapstructure:"status" json:"status" yaml:"status"`
+}
+
+// 出网代理：协议/地址/端口/账密 + 作用范围。
+//
+// ★ 为什么不叫 Proxy、也不复用上面那个 `proxy` 键：上面那个是中转
+// （引擎侧的 IPTV 取流反向代理）的开关，协议/地址/端口在改造时已写死进引擎
+// （见 until/proxyAddr.go），与出网代理毫无关系却同名。两段并存时
+// `out_proxy:` 与 `proxy:` 必须都留在 config.yml 里，各自独立。
+//
+// ★ 这一项必须同时在 iptv-engine/dto/configDto.go 里声明 —— 引擎会整份重写
+// config.yml，只在一侧声明的键会在引擎保存配置时被静默丢掉（理由同 BuildLt）。
+type OutProxy struct {
+	// Type 代理协议：""/"none"=无代理，"socks5"、"http"。
+	// 取值用字符串而不是枚举下标，是为了让「无代理」在 config.yml 里就是
+	// 一句 `type: none`，读的人不用回查代码就知道当前是什么。
+	Type string `mapstructure:"type" json:"type" yaml:"type"`
+	Host string `mapstructure:"host" json:"host" yaml:"host"`
+	Port int64  `mapstructure:"port" json:"port" yaml:"port"`
+	// AuthOn 是「代理账号密码」开关。关着时下面 User/Pwd 一律不生效，
+	// 也不用保存 —— 开关关着还把口令留在文件里没意义。
+	AuthOn int64  `mapstructure:"auth_on" json:"authOn" yaml:"auth_on"`
+	User   string `mapstructure:"user" json:"user" yaml:"user"`
+	Pwd    string `mapstructure:"pwd" json:"pwd" yaml:"pwd"`
+	// 作用范围：每个功能各一个开关（0 关 / 1 开），彼此独立。
+	UseEpg   int64 `mapstructure:"use_epg" json:"useEpg" yaml:"use_epg"`       // EPG 更新
+	UseSrc   int64 `mapstructure:"use_src" json:"useSrc" yaml:"use_src"`       // 频道源更新
+	UseUp    int64 `mapstructure:"use_up" json:"useUp" yaml:"use_up"`          // 在线升级（默认选中）
+	UseRelay int64 `mapstructure:"use_relay" json:"useRelay" yaml:"use_relay"` // 中转取流（限 SOCKS5，全部授权账号可用）
 }
 
 type Resolution struct {
@@ -144,6 +176,7 @@ type Config struct {
 	Ad          Ad         `mapstructure:"ad" json:"ad" yaml:"ad"`
 	Rss         Rss        `mapstructure:"rss" json:"rss" yaml:"rss"`
 	Proxy       Proxy      `mapstructure:"proxy" json:"proxy" yaml:"proxy"`
+	OutProxy    OutProxy   `mapstructure:"out_proxy" json:"outProxy" yaml:"out_proxy"`
 	Resolution  Resolution `mapstructure:"resolution" json:"resolution" yaml:"resolution"`
 	Epg         Epg        `mapstructure:"epg" json:"epg" yaml:"epg"`
 	System      System     `mapstructure:"system" json:"system" yaml:"system"`

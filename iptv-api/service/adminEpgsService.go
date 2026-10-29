@@ -184,20 +184,21 @@ func DeleteEpg(req dto.ReqID) dto.ReturnJsonDto {
 }
 
 func BindChannel() dto.ReturnJsonDto {
-	// ClearBind() // 清空绑定
-	until.BindChannel() // 绑定频道
-
+	// 手动重算绑定：走统一收尾出口（重算绑定 + 作废受影响套餐缓存）。
+	until.RequestChannelRefresh()
 	return dto.ReturnJsonDto{Code: 1, Msg: "绑定成功", Type: "success"}
 }
 
 func ClearBind() dto.ReturnJsonDto {
 	dao.DB.Model(&models.IptvEpg{}).Where("content != ''").Update("content", "")
-	until.BindChannel() // 绑定频道
+	// 清空全部手动绑定 ⇒ 所有频道的绑定关系都可能变 ⇒ 全量收尾。
+	until.RequestChannelRefresh()
 	return dto.ReturnJsonDto{Code: 1, Msg: "清除绑定成功", Type: "success"}
 }
 
 func ClearCache() dto.ReturnJsonDto {
-	go until.CleanMealsEpgCacheAll()
+	// 手工清缓存：作废全部套餐的聚合节目单并重算（不跑测速）。
+	go until.InvalidateAllMealEpgCachesAndRebuild()
 	return dto.ReturnJsonDto{Code: 1, Msg: "清除缓存成功", Type: "success"}
 }
 
@@ -231,6 +232,10 @@ func EpgImport(req dto.EpgFromSaveReq) dto.ReturnJsonDto {
 	if eId != 0 {
 		if err := dao.DB.Model(&models.IptvEpgList{}).Where("id = ?", eId).First(&eOld).Error; err != nil {
 			return dto.ReturnJsonDto{Code: 0, Msg: "频道列表不存在", Type: "danger"}
+		}
+		// 改名了 ⇒ 旧名下的暂存下载物作废（否则下次更新前一直占着卷）。
+		if eOld.Name != "" && eOld.Name != listName {
+			until.RemoveEpgSourceStage(eOld.Name)
 		}
 		iptvEpgList.ID = eOld.ID
 		if err := dao.DB.Model(&models.IptvEpgList{}).Where("id = ?", eId).Updates(&iptvEpgList).Error; err != nil {
@@ -284,7 +289,8 @@ func UploadLogo(c *gin.Context) dto.ReturnJsonDto {
 	if err := c.SaveUploadedFile(file, dst); err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "保存文件失败:" + err.Error(), Type: "danger"}
 	}
-	go until.CleanMealsEpgCacheAll()
+	// logo 变了：节目单里的图标要跟着变 ⇒ 作废聚合节目单并重算（不跑测速）。
+	go until.InvalidateAllMealEpgCachesAndRebuild()
 	return dto.ReturnJsonDto{Code: 1, Msg: "上传成功", Type: "success"}
 }
 
@@ -323,6 +329,8 @@ func DelEpgList(req dto.ReqID) dto.ReturnJsonDto {
 	if err := dao.DB.Where("id = ?", listId).Delete(&models.IptvEpgList{}).Error; err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "删除列表失败:" + err.Error(), Type: "danger"}
 	}
+	// 源没了，它的暂存下载物也一起清掉（否则会一直占着持久卷）。
+	until.RemoveEpgSourceStage(epgList.Name)
 
 	var epgs []models.IptvEpg
 	dao.DB.Model(&models.IptvEpg{}).Where("from_list like ?", "%"+fmt.Sprintf("%d", epgList.ID)+"%").Find(&epgs)

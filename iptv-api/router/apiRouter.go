@@ -116,6 +116,10 @@ var adminRoutes = []apiRoute{
 	// 直连失败或延迟过大会自动切国内加速（见 until/ghnet.go、until/mytvOnline.go）。
 	{"clientMyTV/checkBase", api.MytvCheckBase},
 	{"clientMyTV/upgradeBase", api.MytvUpgradeBase},
+	// 「测试APK地址」/「保存地址」：与清和壳同构，只是落的是 mytv 独立地址
+	// （cfg.MyTV.ServerUrl），不触发编译（编译是分钟级重活）。
+	{"clientMyTV/testUrl", api.ClientMyTVTestUrl},
+	{"clientMyTV/saveUrl", api.ClientMyTVSaveUrl},
 
 	// 定制客户端 APK（**定制授权专属**，只发 amd64 的定制分支）。
 	// 与 mytv 的差别：没有 checkBase/upgradeBase（取消基底在线升级），
@@ -146,6 +150,7 @@ var adminRoutes = []apiRoute{
 	{"client/decoder", api.ClientDecoder},
 	{"client/buffTimeout", api.ClientBuffTimeout},
 	{"client/needAuthor", api.ClientNeedAuthor},
+	{"client/forceUpdate", api.ClientForceUpdate},
 	{"client/appInfo", api.ClientAppInfo},
 	// 「保存并测试」拆两步：这一步只测可达性，不落盘、不触发编译。
 	{"client/testUrl", api.ClientTestUrl},
@@ -194,8 +199,9 @@ var adminRoutes = []apiRoute{
 	{"admins/data", api.AdminsData},
 	{"admins/save", api.Admins},
 
-	// --- 关于 ---
-	{"about/data", api.AboutData},
+	// --- 使用说明（首次进入的引导页）---
+	{"guide/data", api.GuideData},
+	{"guide/ack", api.GuideAck},
 
 	// --- SSL 证书（系统菜单）---
 	// 证书/私钥固定落在 /config/cert（持久卷），开关与端口落在 config.yml 的 ssl 段；
@@ -204,6 +210,16 @@ var adminRoutes = []apiRoute{
 	{"ssl/save", api.SslSave},
 	{"ssl/clear", api.SslClear},
 
+	// --- 出网代理（系统菜单）---
+	// 协议/地址/端口/账密 + 作用范围落在 config.yml 的 out_proxy 段；
+	// 保存前先实测连代理 + 访问 GitHub/Google，不通过不落盘（见 until/outProxy.go）。
+	// 注意与 engine/proxy 区分：那个是「中转」开关，中转取流走代理是这里的 useRelay。
+	{"proxy/data", api.ProxyData},
+	{"proxy/test", api.ProxyTest},
+	{"proxy/save", api.ProxySave},
+	// 作用范围开关单独提交：拨开关即生效，不与「保存配置」捆绑
+	{"proxy/scope", api.ProxyScope},
+
 	// --- 引擎（改造前叫「授权 / license」）---
 	{"engine/data", api.EngineData},
 	{"engine/checkProxy", api.CheckProxy},
@@ -211,8 +227,10 @@ var adminRoutes = []apiRoute{
 	{"engine/proxy", api.EngineProxy},
 	{"engine/restart", api.EngineRestart},
 	{"engine/autoRes", api.EngineAutoRes},
+	{"engine/autoResRun", api.EngineAutoResRun},
 	{"engine/disCh", api.EngineDisCh},
 	{"engine/epgFuzz", api.EngineEpgFuzz},
+	{"engine/epgFuzzRun", api.EngineEpgFuzzRun},
 	{"engine/register", api.EngineRegister},
 	{"engine/login", api.EngineLogin},
 	{"engine/changePwd", api.EngineChangePwd},

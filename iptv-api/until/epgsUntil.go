@@ -60,14 +60,22 @@ func ConvertCntvToXml(cntv dto.CntvJsonChannel, eName string) dto.XmlTV {
 	return tv
 }
 
-// EpgXmlCacheKey 是"某个 EPG 源抓回来的整份 XML"的缓存键。
-func EpgXmlCacheKey(name string) string {
-	return "epgXmlFrom_" + strings.TrimSpace(name)
+// fetchEpgSource 是"抓取 EPG 源 XML"的注入点。
+//
+// 生产实现就是 GetUrlDataVia；做成变量是为了让测试能数"下载了几次" ——
+// 「缓存失效时不重复下载」这条承诺只能靠计数来证。
+var fetchEpgSource = func(url string) string {
+	return GetUrlDataVia(url, ProxyUseEpg)
+}
+
+// fetchCntvData 是"抓取 CNTV 数据"的注入点（同上）。
+var fetchCntvData = func(url string) string {
+	return GetUrlDataVia(url, ProxyUseEpg)
 }
 
 func GetEpgListXml(name, url string) dto.XmlTV {
 	epgUrl := url
-	cacheKey := EpgXmlCacheKey(name)
+	cacheKey := EpgSourceXmlKey(name)
 	var xmlTV dto.XmlTV
 	var xmlByte []byte
 	readCacheOk := false
@@ -80,9 +88,33 @@ func GetEpgListXml(name, url string) dto.XmlTV {
 	}
 
 	if !readCacheOk {
-		xmlByte = []byte(GetUrlData(epgUrl))
-		if dao.Cache.Set(cacheKey, xmlByte) != nil {
-			dao.Cache.Delete(cacheKey)
+		// 缓存没有 ⇒ 先看**暂存**（上次下载物，留在持久卷里直到下次更新）。
+		// 这一步是"缓存错误回落时不重复下载"的关键：节目单是按套餐聚合的，
+		// 缓存一旦失效，没有暂存就会让每个套餐各下载一次同一个源。
+		if staged, ok := LoadEpgSourceStage(name, url); ok {
+			xmlByte = staged
+			readCacheOk = true
+			// 顺手回填缓存（尽力而为，失败不影响返回）
+			if dao.Cache != nil {
+				if dao.Cache.Set(cacheKey, xmlByte) != nil {
+					dao.Cache.Delete(cacheKey)
+				}
+			}
+		}
+	}
+
+	if !readCacheOk {
+		xmlByte = []byte(fetchEpgSource(epgUrl))
+		if len(xmlByte) > 0 {
+			// 下载成功 ⇒ 立刻暂存：这一份会一直留到该源下次更新为止。
+			if err := StageEpgSource(name, url, xmlByte); err != nil {
+				log.Println("EPG源暂存失败:", err)
+			}
+			if dao.Cache != nil {
+				if dao.Cache.Set(cacheKey, xmlByte) != nil {
+					dao.Cache.Delete(cacheKey)
+				}
+			}
 		}
 	}
 	xml.Unmarshal(xmlByte, &xmlTV)
@@ -104,7 +136,7 @@ func GetEpgCntv(name string) (dto.CntvJsonChannel, error) {
 	name = strings.ToLower(name)
 
 	// 与 service/epgService.go 共用同一个键函数。
-	cacheKey := dao.CNTVCacheKey(name)
+	cacheKey := EpgSourceCntvKey(name)
 
 	epgUrl := "https://api.cntv.cn/epg/epginfo?c=" + name + "&serviceId=channel&d="
 
@@ -118,10 +150,27 @@ func GetEpgCntv(name string) (dto.CntvJsonChannel, error) {
 	}
 
 	if !readCacheOk {
-		jsonStr := GetUrlData(epgUrl)
+		// 缓存没有 ⇒ 先看**暂存**（当天抓下来的那份，留在持久卷里）。
+		// 节目单按套餐聚合，同一个频道会被多个套餐各读一次；
+		// 没有暂存的话，缓存一失效就会每个套餐各下载一次同一个源。
+		if staged, ok := LoadEpgCntvStage(name, "until"); ok {
+			if err := json.Unmarshal(staged, &cntvJson); err == nil {
+				readCacheOk = true
+			}
+		}
+	}
+
+	if !readCacheOk {
+		jsonStr := fetchCntvData(epgUrl)
 		err := json.Unmarshal([]byte(jsonStr), &cntvJson)
 		if err != nil {
 			return dto.CntvJsonChannel{}, err
+		}
+		// 抓到就暂存（当天有效），避免节目单聚合时反复下载同一个频道。
+		if raw, mErr := json.Marshal(cntvJson); mErr == nil {
+			if sErr := StageEpgCntv(name, "until", raw); sErr != nil {
+				log.Println("CNTV暂存失败:", sErr)
+			}
 		}
 		if dao.Cache.SetJSON(cacheKey, cntvJson) != nil {
 			dao.Cache.Delete(cacheKey)
@@ -139,15 +188,20 @@ func UpdataEpgList() bool {
 
 	for _, list := range epgLists {
 		log.Println("更新EPG源: ", list.Name)
-		cacheKey := EpgXmlCacheKey(list.Name)
+		cacheKey := EpgSourceXmlKey(list.Name)
 		dao.Cache.Delete(cacheKey)
-		xmlStr := GetUrlData(strings.TrimSpace(list.Url), list.UA)
+		xmlStr := GetUrlDataVia(strings.TrimSpace(list.Url), ProxyUseEpg, list.UA)
 		if xmlStr == "" {
 			failed = append(failed, list.Name+"(抓取为空)")
 			continue
 		}
 
 		xmlByte := []byte(xmlStr)
+		// 暂存这份下载物：一直留到该源下次更新为止。
+		// 这样即便缓存写失败、缓存被清空，节目单生成也不会重复下载同一个源。
+		if err := StageEpgSource(list.Name, list.Url, xmlByte); err != nil {
+			log.Println("EPG源暂存失败:", err)
+		}
 		if dao.Cache.Set(cacheKey, xmlByte) != nil {
 			dao.Cache.Delete(cacheKey)
 		}
@@ -200,7 +254,9 @@ func UpdataEpgList() bool {
 			// 等于自己跟自己抢写锁 → 交给合并调度器，整轮只跑一遍。
 			RequestChannelRefresh()
 		} else {
-			go CleanMealsEpgCacheAll()
+			// 没有新增 EPG ⇒ 绑定关系不变，只有节目单内容变了：
+			// 作废全部套餐的聚合节目单并重算（不跑测速）。
+			go InvalidateAllMealEpgCachesAndRebuild()
 		}
 	}
 
@@ -214,11 +270,16 @@ func UpdataEpgList() bool {
 
 func UpdataEpgListOne(list models.IptvEpgList, newAdd bool) (bool, error) {
 	log.Println("更新EPG源: ", list.Name)
-	cacheKey := EpgXmlCacheKey(list.Name)
+	cacheKey := EpgSourceXmlKey(list.Name)
 	dao.Cache.Delete(cacheKey)
-	xmlStr := GetUrlData(strings.TrimSpace(list.Url), list.UA)
+	xmlStr := GetUrlDataVia(strings.TrimSpace(list.Url), ProxyUseEpg, list.UA)
 	if xmlStr != "" {
 		xmlByte := []byte(xmlStr)
+		// 暂存这份下载物：一直留到该源下次更新为止。
+		// 这样即便缓存写失败、缓存被清空，节目单生成也不会重复下载同一个源。
+		if err := StageEpgSource(list.Name, list.Url, xmlByte); err != nil {
+			log.Println("EPG源暂存失败:", err)
+		}
 		if dao.Cache.Set(cacheKey, xmlByte) != nil {
 			dao.Cache.Delete(cacheKey)
 		}
@@ -271,7 +332,8 @@ func UpdataEpgListOne(list models.IptvEpgList, newAdd bool) (bool, error) {
 				// 与 UpdataEpgList 同一个出口：合并调度器会顺带失效聚合缓存。
 				RequestChannelRefresh()
 			} else {
-				go CleanMealsEpgCacheAll()
+				// 没有新增 EPG ⇒ 绑定关系不变，只有节目单内容变了。
+				go InvalidateAllMealEpgCachesAndRebuild()
 			}
 
 			log.Println("EPG更新完成")
@@ -365,14 +427,19 @@ func (bi *bindIndex) resolve(caID int64, channelName string) int64 {
 const bindNameBatch = 400
 
 // BindChannel 重算「频道 -> EPG」绑定。
-func BindChannel() bool {
+//
+// 返回值是"绑定关系发生变化的频道分组 id 列表"（去重、升序无关）。
+// 调用方据此决定失效范围 —— 本函数**只重算绑定**，不再自行作废缓存：
+// 以前这里会调一次 CleanMealsEpgCacheAll，而收尾调度器末尾又会调一次，
+// 一次频道变动因此发出两次重建信号（见 channelRefresh.go）。
+func BindChannel() []int64 {
 	var epgList []models.IptvEpg
 	if err := dao.DB.Model(&models.IptvEpg{}).Where("status = 1").Order("id asc").Find(&epgList).Error; err != nil {
 		log.Println("绑定EPG失败：查询EPG出错:", err)
-		return false
+		return nil
 	}
 	if len(epgList) == 0 {
-		return true
+		return nil
 	}
 	bi := buildBindIndex(epgList)
 
@@ -390,7 +457,7 @@ func BindChannel() bool {
 		Group("c.category_id, c.name, c.epg_id").
 		Find(&rows).Error; err != nil {
 		log.Println("绑定EPG失败：查询频道出错:", err)
-		return false
+		return nil
 	}
 
 	// 按 (分类, 目标EPG) 归并待改写项。
@@ -458,40 +525,13 @@ func BindChannel() bool {
 	}
 
 	if len(touched) > 0 {
-		go checkCaIdsInMeals(touched)
 		cfg := dao.GetConfig()
-		if cfg.Epg.Fuzz == 1 && dao.Lic.Type != 0 {
+		if cfg != nil && cfg.Epg.Fuzz == 1 && dao.Lic.Type != 0 {
+			log.Printf("通知引擎开始执行EPG模糊匹配...")
 			dao.WS.SendWS(dao.Request{Action: "checkChEpg"})
-			CleanMealsEpgCacheAll()
 		}
 	}
-	return true
-}
-
-func checkCaIdsInMeals(ids []int64) {
-	var rebuild = false
-	for _, id := range ids {
-		var count int64
-		err := dao.DB.Model(&models.IptvMeals{}).
-			Where("(content = ? OR content LIKE ? OR content LIKE ? OR content LIKE ?) AND status = 1",
-				id,                          // 单独一个值
-				fmt.Sprintf("%d,%%", id),    // 开头
-				fmt.Sprintf("%%,%d,%%", id), // 中间
-				fmt.Sprintf("%%,%d", id),    // 结尾
-			).
-			Count(&count).Error
-		if err != nil {
-			continue
-		}
-		if count > 0 {
-			rebuild = true
-			break
-		}
-	}
-
-	if rebuild {
-		CleanMealsRssCacheAll()
-	}
+	return touched
 }
 
 // splitCategoryIds 把 "1,2,3" 解析成 int64 集合。
@@ -663,26 +703,95 @@ func SyncEpgs(fromId int64, epgs []models.IptvEpg, newAdd bool) (bool, error) {
 	return false, errors.New("无新增数据")
 }
 
-// epgCacheKey 是「套餐聚合节目单」在文件缓存里的键（同时也是文件名）。
-func epgCacheKey(id int64) string {
-	return "rssEpgXml_" + strconv.FormatInt(id, 10)
-}
-
-// GetEpgPath 确保套餐的聚合节目单缓存已就绪，并返回**缓存文件的绝对路径**。
-func GetEpgPath(id int64) (string, bool) {
+// EnsureMealEpgCachePath 确保套餐的聚合节目单缓存已就绪，并返回**缓存文件的绝对路径**。
+//
+// 回落语义：缓存不可用（dao.Cache 为 nil、缓存目录建不出来、写盘失败）时
+// 返回 ok=false —— 调用方必须据此改用「现场生成的内容」下发，
+// 不能因为缓存写不进去就把空节目单发给客户端。
+func EnsureMealEpgCachePath(id int64) (string, bool) {
 	if dao.Cache == nil {
 		return "", false
 	}
-	path := filepath.Join(dao.Cache.Dir, epgCacheKey(id))
+	path := filepath.Join(dao.Cache.Dir, mealEpgXmlKey(id))
 	if hasXMLDeclFile(path) {
 		return path, true
 	}
-	return buildEpgCache(id)
+	return writeMealEpgCache(id)
+}
+
+// EnsureMealEpgPayload 返回套餐聚合节目单的**下发载荷**。
+//
+// 三重返回：
+//   - path：缓存文件路径。缓存可用且写盘成功时非空，handler 可以流式直发。
+//   - body：完整 XML 字节（含声明头）。缓存不可用/写失败时用它兜底。
+//   - ok：这份套餐到底有没有节目单。false 表示"这个套餐本来就没内容"。
+//
+// 关键语义：**只要 ok=true，调用方就一定能拿到内容** —— 缓存坏了也不能发空节目单。
+//
+// 注意：节目单**只生成一次**。缓存写盘成功 ⇒ 给路径（流式直发最省事）；
+// 写盘失败 ⇒ 给现场算出来的内容。不要因为回落再算一遍（聚合很贵）。
+func EnsureMealEpgPayload(id int64) (string, []byte, bool) {
+	// 缓存已有文件 ⇒ 直接给路径。
+	if dao.Cache != nil {
+		path := filepath.Join(dao.Cache.Dir, mealEpgXmlKey(id))
+		if hasXMLDeclFile(path) {
+			return path, nil, true
+		}
+	}
+
+	// 缓存没有 ⇒ 现场生成一次。
+	body, ok := buildMealEpgXml(id)
+	if !ok {
+		return "", nil, false
+	}
+
+	// 回写缓存：成功就流式直发，失败就把内容直接给出去。
+	if dao.Cache != nil {
+		key := mealEpgXmlKey(id)
+		if err := dao.Cache.Set(key, body); err != nil {
+			log.Println("epg缓存设置失败:", err)
+			dao.Cache.Delete(key)
+			return "", body, true
+		}
+		return filepath.Join(dao.Cache.Dir, key), nil, true
+	}
+	return "", body, true
+}
+
+// EnsureMealEpgXml 返回套餐聚合节目单的**完整 XML 字节**（含 XML 声明头）。
+//
+// 这是"缓存错误回落"的正解：缓存只是加速手段。
+// 缓存命中 → 直接读缓存文件；缓存不可用/写失败 → 现场算一遍再返回。
+// 无论缓存处于什么状态，只要这个套餐本身有节目单，调用方就一定能拿到内容。
+func EnsureMealEpgXml(id int64) ([]byte, bool) {
+	if dao.Cache != nil {
+		path := filepath.Join(dao.Cache.Dir, mealEpgXmlKey(id))
+		if hasXMLDeclFile(path) {
+			if body, err := os.ReadFile(path); err == nil {
+				return body, true
+			}
+		}
+	}
+
+	body, ok := buildMealEpgXml(id)
+	if !ok {
+		return nil, false
+	}
+
+	// 回写缓存：失败只算错误，不影响本次返回。
+	if dao.Cache != nil {
+		key := mealEpgXmlKey(id)
+		if err := dao.Cache.Set(key, body); err != nil {
+			log.Println("epg缓存设置失败:", err)
+			dao.Cache.Delete(key)
+		}
+	}
+	return body, true
 }
 
 // GetEpg 只保证「套餐聚合节目单缓存已就绪」，返回值没有用途。
-func GetEpg(id int64) {
-	_, _ = GetEpgPath(id)
+func EnsureMealEpgCache(id int64) {
+	_, _ = EnsureMealEpgCachePath(id)
 }
 
 // hasXMLDeclFile 报告 path 是否是一个已存在、且以 XML 声明开头的缓存文件。
@@ -698,11 +807,31 @@ func hasXMLDeclFile(path string) bool {
 	return n == len(head) && string(head) == xml.Header
 }
 
-// buildEpgCache 生成套餐聚合节目单、写成带 XML 声明头的缓存文件，返回其路径。
-func buildEpgCache(id int64) (string, bool) {
+// writeMealEpgCache 生成套餐聚合节目单并写入缓存文件，返回其路径。
+//
+// 写盘失败 ⇒ 返回 ok=false（调用方要能改走"现场生成内容直接下发"的退路）。
+func writeMealEpgCache(id int64) (string, bool) {
+	body, ok := buildMealEpgXml(id)
+	if !ok {
+		return "", false
+	}
+	key := mealEpgXmlKey(id)
+	if err := dao.Cache.Set(key, body); err != nil {
+		log.Println("epg缓存设置失败:", err)
+		dao.Cache.Delete(key)
+		return "", false
+	}
+	return filepath.Join(dao.Cache.Dir, key), true
+}
+
+// buildMealEpgXml 生成套餐聚合节目单的 XML 字节（含 XML 声明头）。
+//
+// 与"写缓存"分开：内容生成成功但写盘失败时，内容本身仍然是好的，
+// 调用方可以把它直接发给客户端，而不是返回一个空白节目单。
+func buildMealEpgXml(id int64) ([]byte, bool) {
 	var meal models.IptvMeals
 	if err := dao.DB.Model(&models.IptvMeals{}).Where("id = ? and status = 1", id).First(&meal).Error; err != nil {
-		return "", false
+		return nil, false
 	}
 
 	raw := strings.Split(meal.Content, ",")
@@ -713,12 +842,12 @@ func buildEpgCache(id int64) (string, bool) {
 		}
 	}
 	if len(categoryIdList) == 0 {
-		return "", false
+		return nil, false
 	}
 
 	var categoryList []models.IptvCategory
 	if err := dao.DB.Model(&models.IptvCategory{}).Where("id in (?) and enable = 1", categoryIdList).Order("sort asc").Find(&categoryList).Error; err != nil {
-		return "", false
+		return nil, false
 	}
 
 	var channels []models.IptvChannelShow
@@ -740,21 +869,14 @@ func buildEpgCache(id int64) (string, bool) {
 	data, err := xml.Marshal(res)
 	if err != nil {
 		log.Println("epg缓存序列化失败:", err)
-		return "", false
+		return nil, false
 	}
 
 	// 声明头一并写进缓存：这份文件就是"最终响应体"，直发时不再拼任何东西。
 	body := make([]byte, 0, len(xml.Header)+len(data))
 	body = append(body, xml.Header...)
 	body = append(body, data...)
-
-	key := epgCacheKey(id)
-	if err := dao.Cache.Set(key, body); err != nil {
-		log.Println("epg缓存设置失败:", err)
-		dao.Cache.Delete(key)
-		return "", false
-	}
-	return filepath.Join(dao.Cache.Dir, key), true
+	return body, true
 }
 
 func CleanTV(tv *dto.XmlTV) {

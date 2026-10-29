@@ -3,10 +3,13 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"iptv-api/bootstrap"
 	"iptv-api/dao"
 	"iptv-api/dto"
 	"iptv-api/until"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -384,4 +387,103 @@ func MytvReleases(base string) dto.MyTvDto {
 		DownloadUrl: base + "/app/" + cfg.Site.MytvNameOr() + "-mytv.apk",
 		UpdateMsg:   cfg.MyTV.Update,
 	}
+}
+
+// TestMyTVServerURL 「测试APK地址」：探测 mytv 独立连接地址是否可达。
+// 只认能连上并拿到 HTTP 响应（含 4xx/5xx）—— 与清和壳 TestServerURL 同一口径。
+// 只读、不落盘：地址即时落盘走 SaveMyTVServerURL，避免每点一次测试就触发分钟级编译。
+//
+// mytv 的连接地址是独立的（cfg.MyTV.ServerUrl），但编译时同样只在站点根补 /apk，
+// 所以探测也走 base + "/apk/getver"；shell 标记固定为 "MyTV"，方便前端回显。
+func TestMyTVServerURL(req dto.ClientTestUrlReq) dto.ReturnJsonDto {
+	raw := strings.TrimSpace(req.ServerUrl)
+	if raw == "" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "请先填写连接地址", Type: "danger"}
+	}
+	base := bootstrap.NormalizeServerURL(raw)
+	if base == "" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "地址不合法", Type: "danger"}
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "地址不合法：" + raw, Type: "danger"}
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "只支持 http/https 地址", Type: "danger"}
+	}
+
+	probe := base + "/apk/getver"
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+	// Go 默认会带环境里的代理，后台部署常没有可用代理，反而把"站点可达"误报成失败。
+	client.Transport = &http.Transport{Proxy: nil}
+
+	resp, err := client.Get(probe)
+	if err != nil {
+		// 连接失败：先判断是不是「目标地址是 IPv6 但后台探测容器没有 IPv6」造成的假阴性。
+		if isIPv6ConnectFailure(base) {
+			return dto.ReturnJsonDto{
+				Code: 0,
+				Msg:  "当前因地址为ipv6导致测试失败可能无法连接",
+				Type: "ipv6",
+				Data: map[string]any{
+					"ipv6":     true,
+					"shell":    "MyTV",
+					"probeUrl": probe,
+					"stored":   base,
+				},
+			}
+		}
+		return dto.ReturnJsonDto{Code: 0, Msg: "无法连接：" + err.Error(), Type: "danger"}
+	}
+	defer resp.Body.Close()
+
+	code := resp.StatusCode
+	msg := "连接正常"
+	tip := "success"
+	if code == 404 || code == 405 {
+		msg = "服务可达，但路径 " + probe + " 返回 " + strconv.Itoa(code) + "；请确认地址不要带 path（编译时会自动补）"
+		tip = "danger"
+	} else if code >= 500 {
+		msg = "服务可达，但服务端返回错误 " + strconv.Itoa(code)
+		tip = "danger"
+	}
+	return dto.ReturnJsonDto{
+		Code: 1,
+		Msg:  msg,
+		Type: tip,
+		Data: map[string]any{
+			"shell":    "MyTV",
+			"probeUrl": probe,
+			"status":   code,
+			"stored":   base,
+		},
+	}
+}
+
+// SaveMyTVServerURL 只把 mytv 的「APK连接地址」落到 config.yml，不触发编译。
+// 与清和壳 SaveServerURL 同构，只是落的是 cfg.MyTV.ServerUrl（mytv 独立地址）。
+func SaveMyTVServerURL(req dto.ClientTestUrlReq) dto.ReturnJsonDto {
+	raw := strings.TrimSpace(req.ServerUrl)
+	if raw == "" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "请先填写连接地址", Type: "danger"}
+	}
+	base := bootstrap.NormalizeServerURL(raw)
+	if base == "" {
+		return dto.ReturnJsonDto{Code: 0, Msg: "地址不合法", Type: "danger"}
+	}
+	cfg := dao.GetConfig()
+	if cfg.MyTV.ServerUrl == base {
+		return dto.ReturnJsonDto{Code: 1, Msg: "地址未变化，已是最新", Type: "success", Data: map[string]any{"stored": base}}
+	}
+	cfg.MyTV.ServerUrl = base
+	dao.SetConfig(cfg)
+	return dto.ReturnJsonDto{Code: 1, Msg: "地址已保存", Type: "success", Data: map[string]any{"stored": base}}
 }

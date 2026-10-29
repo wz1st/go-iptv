@@ -37,4 +37,4 @@ package until
 // 后端据此返回 https:// 地址（APK 取流/下载不再拿到 http 明文地址而失败）；
 // 「80 强制跳转 HTTPS」在请求已带 X-Forwarded-Proto: https 时**不再跳转**，
 // 避免与反代自身的跳转形成环路。站点的直连与"自己开 HTTPS"两种老场景行为完全不变。
-var Version = "v4.5.0-custom.1"
+var Version = "v4.10.3-custom.1"

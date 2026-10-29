@@ -212,8 +212,11 @@ func UpdateList() {
 }
 
 // updateSource 更新单个频道源（抓取 url -> 落库频道/分组）。
+//
+// 抓取走「频道源更新」这一路的代理开关（config.yml 的 out_proxy.use_src）。
 func updateSource(list models.IptvCategoryList) {
-	client := &http.Client{}
+	until.LogProxyUse(until.ProxyUseSrc, list.Url, true)
+	client := &http.Client{Transport: until.OutProxyTransport(until.ProxyUseSrc)}
 	req, err := http.NewRequest("GET", strings.TrimSpace(list.Url), nil)
 	if err != nil {
 		log.Println("更新频道列表失败--->创建请求错误:: ", err.Error(), " URL: ", list.Url)
