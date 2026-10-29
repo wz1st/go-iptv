@@ -355,6 +355,11 @@ type bindIndex struct {
 	manual map[string][]int64 // 归一化频道名 -> epgID（来自 Content：手动绑定名单）
 	exact  map[string][]int64 // 归一化 EPG 名 -> epgID
 	alias  map[string][]int64 // 归一化别名   -> epgID（来自 Remarks：自动绑定规则）
+	// black 是**排除名单**：归一化频道名 -> 把这个台排除掉的 epgID 列表
+	// （来自 Blacklist）。命中排除的那个 EPG 就不绑它。
+	//
+	// 黑名单是 per-EPG 的：这个 EPG 不要这个台，但别的 EPG 仍可以绑。
+	black map[string][]int64
 }
 
 // buildBindIndex 一次性建好索引。
@@ -363,6 +368,7 @@ func buildBindIndex(epgs []models.IptvEpg) *bindIndex {
 		manual: make(map[string][]int64),
 		exact:  make(map[string][]int64),
 		alias:  make(map[string][]int64),
+		black:  make(map[string][]int64),
 	}
 
 	for _, epg := range epgs {
@@ -388,10 +394,14 @@ func buildBindIndex(epgs []models.IptvEpg) *bindIndex {
 		for _, n := range strings.Split(epg.Content, ",") {
 			put(bi.manual, n)
 		}
+		// Blacklist 是这个 EPG 的排除名单。
+		for _, n := range strings.Split(epg.Blacklist, ",") {
+			put(bi.black, n)
+		}
 	}
 
 	// 桶内候选按 EPG ID 升序。
-	for _, bucket := range []map[string][]int64{bi.manual, bi.exact, bi.alias} {
+	for _, bucket := range []map[string][]int64{bi.manual, bi.exact, bi.alias, bi.black} {
 		for k := range bucket {
 			ids := bucket[k]
 			sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
@@ -401,9 +411,27 @@ func buildBindIndex(epgs []models.IptvEpg) *bindIndex {
 	return bi
 }
 
+// isBlacklisted 判断该频道名是否被这个 EPG 列入排除名单。
+func (bi *bindIndex) isBlacklisted(channelName string, epgID int64) bool {
+	key := NormalizeChannelKey(channelName)
+	if key == "" {
+		return false
+	}
+	for _, id := range bi.black[key] {
+		if id == epgID {
+			return true
+		}
+	}
+	return false
+}
+
 // resolve 返回频道 channelName 应当绑定的 EPG ID；0 表示判不出。
 //
 // 判定只看**频道名**与规则表，不看分组 —— 这就是"取消 caID 限制"的落点。
+//
+// 黑名单优先：某个 EPG 把这个台列进了排除名单，就不绑它 ——
+// 连手动绑定名单也不例外（用户手动拉黑就是要"这个 EPG 别碰这个台"）。
+// 被拉黑的那个 EPG 跳过之后，继续看下一个候选 ⇒ 别的 EPG 仍能绑这个台。
 func (bi *bindIndex) resolve(channelName string) int64 {
 	key := NormalizeChannelKey(channelName)
 	if key == "" {
@@ -411,6 +439,9 @@ func (bi *bindIndex) resolve(channelName string) int64 {
 	}
 	for _, bucket := range []map[string][]int64{bi.manual, bi.exact, bi.alias} {
 		for _, epgID := range bucket[key] {
+			if bi.isBlacklisted(channelName, epgID) {
+				continue
+			}
 			return epgID
 		}
 	}
@@ -446,28 +477,42 @@ func (m *EpgNameMatcher) Resolve(channelName string) int64 {
 // bindNameBatch 是 `name IN (...)` 的分块大小。
 const bindNameBatch = 400
 
+// BindResult 是一次绑定重算的结果。
+//
+// 区分"新增"与"其它变动"是为了**少叫引擎干活**：
+//   - Added：真正**新绑上来**的频道所在的分组（原来没绑，或绑在别人身上）。
+//     只有这类才需要通知引擎做模糊识别 —— 引擎那边是"按模糊规则认领频道"，
+//     没有新认领需求时叫它就是白跑一趟（它要扫全部频道、算相似度）。
+//   - Touched：所有绑定关系发生变化的分组（新增 + 改判 + 解绑）。
+//     缓存要按它作废 —— 哪怕只是解绑，节目单内容也变了。
+type BindResult struct {
+	Touched []int64 // 绑定关系变过的分组（缓存作废范围）
+	Added   []int64 // 有新绑定进来的分组（才需要引擎重新识别）
+}
+
 // BindChannel 重算「频道 -> EPG」绑定。
 //
 // 2026-10-29 起改成**全局按名字**重算：
 //   - 遍历**全部**频道名（跨分组，不再按 caID 分桶）；
 //   - 频道名命中某条规则（手动绑定名单 / EPG 名 / 自动绑定别名）即视为该绑；
-//   - 已有绑定的**改**到新目标，没绑定的**补**上。
+//   - 已有绑定的**改**到新目标，没绑定的**补**上；
+//   - **排除名单（黑名单）里的台不绑** —— 连手动绑定名单也不例外；
+//     而且它现在绑着的那个 EPG 把它拉黑了 ⇒ 解绑（拉黑就是要断开）。
 //
 // 仍然排除聚合分组（type like 'auto%'）：那些分组的频道表由引擎侧
 // 按 EPG 聚合反推，api 不去改它们的 epg_id。
 //
-// 返回值是"绑定关系发生变化的频道分组 id 列表"（去重、升序无关）。
-// 调用方据此决定失效范围 —— 本函数**只重算绑定**，不再自行作废缓存：
+// 本函数**只重算绑定**，不再自行作废缓存：
 // 以前这里会调一次 CleanMealsEpgCacheAll，而收尾调度器末尾又会调一次，
 // 一次频道变动因此发出两次重建信号（见 channelRefresh.go）。
-func BindChannel() []int64 {
+func BindChannel() BindResult {
 	var epgList []models.IptvEpg
 	if err := dao.DB.Model(&models.IptvEpg{}).Where("status = 1").Order("id asc").Find(&epgList).Error; err != nil {
 		log.Println("绑定EPG失败：查询EPG出错:", err)
-		return nil
+		return BindResult{}
 	}
 	if len(epgList) == 0 {
-		return nil
+		return BindResult{}
 	}
 	bi := buildBindIndex(epgList)
 
@@ -486,27 +531,55 @@ func BindChannel() []int64 {
 		Group("c.category_id, c.name, c.epg_id").
 		Find(&rows).Error; err != nil {
 		log.Println("绑定EPG失败：查询频道出错:", err)
-		return nil
+		return BindResult{}
 	}
 
 	// 按 (分组, 目标EPG) 归并待改写项。
 	// 名字是全局的，但 UPDATE 仍按分组下发 —— 同一分组内一次改一批。
 	pending := make(map[[2]int64][]string)
 	seen := make(map[[2]int64]map[string]struct{})
+	// unbind 收集"要解绑的频道名"（按分组）：这些台被当前绑着的 EPG 拉黑了。
+	unbind := make(map[int64][]string)
+	unbindSeen := make(map[int64]map[string]struct{})
 	// bound 收集"实际绑定到每个 EPG 的频道名"（含本来就绑对的）——
 	// 回写 Content 用的是它，而不是"这次改了几条"。
 	bound := make(map[int64]map[string]struct{})
+	// addedCa 收集"真正新绑上来"的频道所在分组（原来 epg_id = 0 的那些）。
+	addedCa := make(map[int64]struct{})
 	for _, r := range rows {
 		desired := bi.resolve(r.Name)
+		// ★finalEpgID = 这个频道**重算之后**实际挂着的 EPG。
+		// 它跟 desired 的差别有两处：
+		//   - desired == 0（没有规则命中）⇒ 保持原样，不主动解绑；
+		//   - 但它现在绑着的 EPG 把它列进了排除名单 ⇒ 解绑（拉黑就是要断开）。
+		// 用它来填 bound ⇒ 回写的名单是"实际绑定"，而不是"规则命中的" ——
+		// 引擎那边模糊识别绑上来的台也会出现在名单里（api 的规则不认识它们）。
+		finalEpgID := desired
 		if desired == 0 {
-			// 没有任何规则命中这个频道名 ⇒ 保持原样（不主动解绑）。
-			// 解绑是"清空绑定"的活儿，不该在这里顺手做。
+			if r.EpgID != 0 && bi.isBlacklisted(r.Name, r.EpgID) {
+				// ★例外：被拉黑 ⇒ 解绑。
+				finalEpgID = 0
+				if unbindSeen[r.CategoryID] == nil {
+					unbindSeen[r.CategoryID] = make(map[string]struct{}, 8)
+				}
+				if _, dup := unbindSeen[r.CategoryID][r.Name]; !dup {
+					unbindSeen[r.CategoryID][r.Name] = struct{}{}
+					unbind[r.CategoryID] = append(unbind[r.CategoryID], r.Name)
+				}
+			} else {
+				finalEpgID = r.EpgID
+			}
+		}
+		if finalEpgID != 0 {
+			if bound[finalEpgID] == nil {
+				bound[finalEpgID] = make(map[string]struct{}, 8)
+			}
+			bound[finalEpgID][r.Name] = struct{}{}
+		}
+		if desired == 0 {
+			// 没有规则命中 ⇒ 不会产生"要绑到谁"的改写，到此为止。
 			continue
 		}
-		if bound[desired] == nil {
-			bound[desired] = make(map[string]struct{}, 8)
-		}
-		bound[desired][r.Name] = struct{}{}
 		if desired == r.EpgID {
 			// 已经绑对了，不动它（也不刷新它的更新时间）。
 			continue
@@ -520,6 +593,11 @@ func BindChannel() []int64 {
 		}
 		seen[key][r.Name] = struct{}{}
 		pending[key] = append(pending[key], r.Name)
+		// ★原来没绑（epg_id = 0）才是真正的"新增绑定"；
+		// 从别的 EPG 改判过来的是"改判"，不该再惊动引擎做一遍模糊识别。
+		if r.EpgID == 0 {
+			addedCa[r.CategoryID] = struct{}{}
+		}
 	}
 
 	// 排序只是为了让日志和 SQL 的执行顺序可复现（map 遍历顺序是随机的）。
@@ -567,6 +645,37 @@ func BindChannel() []int64 {
 		log.Printf("EPG 绑定完成：更新 %d 条频道绑定", updated)
 	}
 
+	// 执行解绑：被拉黑的台要从当前绑着的 EPG 上摘下来。
+	if len(unbind) > 0 {
+		caIDs := make([]int64, 0, len(unbind))
+		for ca := range unbind {
+			caIDs = append(caIDs, ca)
+		}
+		sort.Slice(caIDs, func(i, j int) bool { return caIDs[i] < caIDs[j] })
+		for _, ca := range caIDs {
+			names := unbind[ca]
+			for i := 0; i < len(names); i += bindNameBatch {
+				end := i + bindNameBatch
+				if end > len(names) {
+					end = len(names)
+				}
+				res := dao.DB.Model(&models.IptvChannel{}).
+					Where("category_id = ? AND name IN ? AND status = 1 AND epg_id <> 0", ca, names[i:end]).
+					Update("epg_id", 0)
+				if res.Error != nil {
+					log.Printf("⚠️ 解绑失败（分类 %d，第 %d~%d 个名字）: %v", ca, i, end-1, res.Error)
+					break
+				}
+				if res.RowsAffected == 0 {
+					continue
+				}
+				updated += res.RowsAffected
+				touched = append(touched, ca)
+			}
+		}
+		log.Printf("EPG 绑定完成：排除名单里的 %d 条频道已解绑", updated)
+	}
+
 	// 回写 Content：让「绑定频道」那一列显示的就是**当前真正绑着的频道名**。
 	//
 	// Content 是全量重写，不是追加 —— 追加会让"改判"留下旧记录
@@ -577,14 +686,20 @@ func BindChannel() []int64 {
 	// 它们对应的频道可能还没被导入，或者刚被删了，不能因为一次重算就丢掉。
 	writeBackEpgBoundNames(epgList, bound)
 
-	if len(touched) > 0 {
-		cfg := dao.GetConfig()
-		if cfg != nil && cfg.Epg.Fuzz == 1 && dao.Lic.Type != 0 {
-			log.Printf("通知引擎开始执行EPG模糊匹配...")
-			dao.WS.SendWS(dao.Request{Action: "checkChEpg"})
-		}
+	// ★只在**新增了绑定**时才通知引擎做模糊识别（通知本身由收尾调度器发出，
+	// 见 channelRefresh.go —— 这里只把"有没有新增"告诉它）。
+	//
+	// 引擎那边的 checkChEpg 是"按模糊规则把还没绑的频道认领过来" ——
+	// 要扫全部频道、逐个算相似度，是笔不小的开销。
+	// 而本轮如果只是解绑（拉黑）或改判（换了个 EPG），没有任何"新认领"的需求，
+	// 叫它就是白跑一趟。以前这里只要 touched 非空就叫，频道一有变动就惊动引擎。
+	added := make([]int64, 0, len(addedCa))
+	for ca := range addedCa {
+		added = append(added, ca)
 	}
-	return touched
+	sort.Slice(added, func(i, j int) bool { return added[i] < added[j] })
+
+	return BindResult{Touched: touched, Added: added}
 }
 
 // MergeBoundChannelNames 把"手动绑定名单"与"自动绑定结果清单"合并成一份展示用的清单。

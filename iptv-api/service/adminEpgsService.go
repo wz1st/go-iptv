@@ -39,22 +39,48 @@ func GetChName(req dto.ReqID) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "查询频道失败", Type: "danger"}
 	}
 
-	// 判定"已绑定"要走与 BindChannel 同一套规则（手动名单 > EPG 名 > 别名），
-	// 否则弹窗里勾上的状态与真正落库的结果会对不上。
+	// 判定"已绑定"要走与 BindChannel 同一套规则（手动名单 > EPG 名 > 别名，
+	// 并跳过排除名单），否则弹窗里勾上的状态与真正落库的结果会对不上。
 	matcher := until.NewEpgNameMatcher()
 
-	var dataList []dto.EpgsReturnDto
-
-	for _, v := range channeList {
-		var data dto.EpgsReturnDto
-		data.Name = v.Name
-		data.Value = v.Name
-		// 命中本 EPG 的规则 ⇒ 已绑定（勾上）。
-		data.Selected = matcher.Resolve(v.Name) == epgId
-		dataList = append(dataList, data)
+	// 黑名单：这个 EPG 不要的台。名单里可能有库里根本没有的名字
+	//（用户手动输入的，供后续频道导入后直接生效），所以它与频道列表分开给。
+	blackSet := make(map[string]struct{})
+	blacklist := make([]string, 0, 8)
+	for _, n := range strings.Split(epg.Blacklist, ",") {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, dup := blackSet[n]; dup {
+			continue
+		}
+		blackSet[n] = struct{}{}
+		blacklist = append(blacklist, n)
 	}
 
-	return dto.ReturnJsonDto{Code: 1, Msg: "操作成功", Type: "success", Data: dataList}
+	channels := make([]string, 0, len(channeList))
+	selected := make([]string, 0, 8)
+	for _, v := range channeList {
+		if _, black := blackSet[v.Name]; black {
+			// 已在排除名单里的台不再出现在候选里（否则能同时"绑定"和"排除"）。
+			continue
+		}
+		channels = append(channels, v.Name)
+		// 命中本 EPG 的规则 ⇒ 已经绑着（这是拖拽源：用户可以把台拖进黑名单）。
+		if matcher.Resolve(v.Name) == epgId {
+			selected = append(selected, v.Name)
+		}
+	}
+
+	return dto.ReturnJsonDto{
+		Code: 1, Msg: "操作成功", Type: "success",
+		Data: dto.EpgBindableDto{
+			Channels:  channels,
+			Selected:  selected,
+			Blacklist: blacklist,
+		},
+	}
 }
 
 func SaveEpg(req dto.EpgSaveReq) dto.ReturnJsonDto {
@@ -103,13 +129,21 @@ func BdingEpg(req dto.EpgBindReq) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "查询EPG失败", Type: "danger"}
 	}
 
-	oldList := strings.Split(epgData.Content, ",")
+	// 黑名单（排除名单）：这个 EPG 不要的台。
+	// 允许"库里还没有的名字"—— 用户先录进去，等频道导入后自动生效。
+	blackList := until.RemoveEmptyStrings(strings.Split(req.Blacklist, ","))
 
-	if until.EqualStringSets(oldList, namesList) {
+	oldList := strings.Split(epgData.Content, ",")
+	oldBlack := strings.Split(epgData.Blacklist, ",")
+
+	bindSame := until.EqualStringSets(oldList, namesList)
+	blackSame := until.EqualStringSets(oldBlack, blackList)
+	if bindSame && blackSame {
 		return dto.ReturnJsonDto{Code: 0, Msg: "EPG " + epgData.Name + "绑定未修改", Type: "success"}
 	}
 
 	epgData.Content = strings.Join(namesList, ",")
+	epgData.Blacklist = strings.Join(blackList, ",")
 
 	if err := dao.DB.Save(&epgData).Error; err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "保存EPG失败", Type: "danger"}
@@ -174,13 +208,25 @@ func DeleteEpg(req dto.ReqID) dto.ReturnJsonDto {
 	if id <= 18 {
 		return dto.ReturnJsonDto{Code: 0, Msg: "CNTV EPG不能删除", Type: "danger"}
 	}
+	// ★先把它挂着的频道解绑，再删 EPG 那一行。
+	// 少了这一步，频道的 epg_id 会指向一条已经不存在的 EPG（悬空 id）：
+	// 重算绑定时"没有规则命中"的频道是**保持原样**的，不会自动归零，
+	// 于是那些频道永远挂着一个查不到节目单的幽灵 EPG。
+	res := dao.DB.Model(&models.IptvChannel{}).Where("epg_id = ?", id).Update("epg_id", 0)
+	unbound := res.RowsAffected
 	dao.DB.Where("id = ?", id).Delete(&models.IptvEpg{})
 	// 删掉的 EPG 可能还挂着一批频道的 epg_id：重算一次让它们回落到别的认领者
 	// 或 0，不要留下指向已删行的悬空 id。
 	until.RequestChannelRefresh()
+	if unbound > 0 {
+		return dto.ReturnJsonDto{
+			Code: 1,
+			Msg:  fmt.Sprintf("EPG删除成功，已解绑 %d 个频道", unbound),
+			Type: "success",
+		}
+	}
 	return dto.ReturnJsonDto{Code: 1, Msg: "EPG删除成功", Type: "success"}
 }
-
 func BindChannel() dto.ReturnJsonDto {
 	// 手动重算绑定：走统一收尾出口（重算绑定 + 作废受影响套餐缓存）。
 	until.RequestChannelRefresh()

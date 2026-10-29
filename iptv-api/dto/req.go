@@ -121,6 +121,9 @@ type EpgSaveReq struct {
 type EpgBindReq struct {
 	ID       int64  `json:"id"`
 	Channels string `json:"channels"`
+	// Blacklist 是这个 EPG 的排除名单（逗号分隔的频道名）。
+	// 名单里的台既不会被自动规则绑上，也不会被手动绑定绑上。
+	Blacklist string `json:"blacklist"`
 }
 
 // EPG 来源  /api/epgFrom

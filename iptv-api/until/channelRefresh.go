@@ -4,6 +4,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"iptv-api/dao"
 )
 
 // 频道表变动后的收尾：作废聚合缓存 → 重算 EPG 绑定 → 按受影响范围作废套餐缓存 → 局部重建。
@@ -135,11 +137,13 @@ func (s *refreshScheduler) fire() {
 		// 所以这里可以放心全清 —— 它的粒度是"聚合分组"而不是"套餐"。
 		channelRefreshClean()
 
-		// 重算 EPG 绑定，返回绑定关系发生变化的分组。
-		touched := channelRefreshBind()
+		// 重算 EPG 绑定。
+		// Touched = 绑定关系变过的分组（新增 + 改判 + 解绑）—— 缓存按它作废；
+		// Added   = 真正新绑上来的分组 —— 只有它才需要引擎再跑一遍模糊识别。
+		br := channelRefreshBind()
 
 		// 受影响的分组 = 本轮变更的分组 ∪ 绑定发生变化的分组。
-		affected := mergeCategoryIds(ids, touched)
+		affected := mergeCategoryIds(ids, br.Touched)
 		if all {
 			// 全量语义：不限定分组 ⇒ 全部套餐都算受影响。
 			affected = nil
@@ -160,6 +164,17 @@ func (s *refreshScheduler) fire() {
 			channelRefreshBuildAll()
 		} else {
 			channelRefreshBuild(mealIds)
+		}
+
+		// ★有**新增绑定**时才让引擎按模糊规则再认领一遍。
+		// 只是解绑（拉黑）或改判时，引擎那边没有"新认领"的需求，
+		// 叫它就是让它白扫一遍全部频道算相似度 —— 以前每次频道变动都会叫。
+		if len(br.Added) > 0 {
+			cfg := dao.GetConfig()
+			if cfg != nil && cfg.Epg.Fuzz == 1 && dao.Lic.Type != 0 {
+				log.Printf("通知引擎开始执行EPG模糊匹配...")
+				dao.WS.SendWS(dao.Request{Action: "checkChEpg"})
+			}
 		}
 
 		s.mu.Lock()

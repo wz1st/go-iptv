@@ -16,9 +16,13 @@ type IptvEpg struct {
 	Content string `gorm:"column:content" json:"content"`
 	// BoundNames 是自动绑定的结果清单（逗号分隔的频道名）。
 	BoundNames string `gorm:"column:bound_names" json:"boundNames"`
-	FromList   string `gorm:"column:from_list" json:"fromList"`
-	Status     bool   `gorm:"column:status" json:"status"`
-	Remarks    string `gorm:"column:remarks" json:"remarks"`
+	// Blacklist 是这个 EPG 的**排除名单**（逗号分隔的频道名）：
+	// 名单里的频道名既不会被自动规则绑上来，也不会被手动绑定绑上。
+	// 与 content 分开存：content 是"要绑"，blacklist 是"不要"。
+	Blacklist string `gorm:"column:blacklist" json:"blacklist"`
+	FromList  string `gorm:"column:from_list" json:"fromList"`
+	Status    bool   `gorm:"column:status" json:"status"`
+	Remarks   string `gorm:"column:remarks" json:"remarks"`
 
 	FromName string `gorm:"-" json:"fromName"`
 	Logo     string `gorm:"-" json:"logo"`

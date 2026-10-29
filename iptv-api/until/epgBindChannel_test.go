@@ -341,3 +341,128 @@ func TestMergeBoundChannelNames(t *testing.T) {
 		t.Fatalf("MergeBoundChannelNames = %q，期望 %q", got, "a,b")
 	}
 }
+
+// TestBlacklistBlocksBinding 守住"黑名单里的台不绑到这个 EPG"。
+//
+// 黑名单是 per-EPG 的：这个 EPG 排除这个台，别的 EPG 仍可以绑。
+func TestBlacklistBlocksBinding(t *testing.T) {
+	setupBindDB(t)
+
+	caID := newBindCategory(t, "央视", "add", true)
+	epgA := newBindEpg(t, "CCTV1", "CCTV1", "")
+	chID := newBindChannel(t, caID, "CCTV1", 0)
+
+	BindChannel()
+	if got := channelEpgID(t, chID); got != epgA {
+		t.Fatalf("频道 epg_id = %d，期望 %d（先正常绑上）", got, epgA)
+	}
+
+	// 把 CCTV1 拉进 epgA 的黑名单 ⇒ 重算后要解绑。
+	dao.DB.Model(&models.IptvEpg{}).Where("id = ?", epgA).Update("blacklist", "CCTV1")
+	BindChannel()
+
+	if got := channelEpgID(t, chID); got != 0 {
+		t.Fatalf("频道 epg_id = %d，期望 0（拉黑后要解绑）", got)
+	}
+}
+
+// TestBlacklistIsPerEpg 守住"黑名单只影响它所属的那个 EPG"。
+//
+// epgA 拉黑了 CCTV1，但 epgB 的规则也认 CCTV1 ⇒ CCTV1 仍该绑到 epgB。
+func TestBlacklistIsPerEpg(t *testing.T) {
+	setupBindDB(t)
+
+	caID := newBindCategory(t, "央视", "add", true)
+	epgA := newBindEpg(t, "台子A", "台子A|CCTV1", "")
+	epgB := newBindEpg(t, "台子B", "台子B|CCTV1", "")
+	chID := newBindChannel(t, caID, "CCTV1", 0)
+
+	dao.DB.Model(&models.IptvEpg{}).Where("id = ?", epgA).Update("blacklist", "CCTV1")
+	BindChannel()
+
+	if got := channelEpgID(t, chID); got != epgB {
+		t.Fatalf("频道 epg_id = %d，期望 %d（epgA 拉黑不该影响 epgB）", got, epgB)
+	}
+}
+
+// TestBlacklistBeatsManualList 守住"黑名单压过手动绑定名单"。
+//
+// 手动名单（content）是最高优先级，但用户主动把它拉黑了 ⇒ 依然不绑。
+func TestBlacklistBeatsManualList(t *testing.T) {
+	setupBindDB(t)
+
+	caID := newBindCategory(t, "央视", "add", true)
+	epgID := newBindEpg(t, "台子A", "台子A", "CCTV1")
+	chID := newBindChannel(t, caID, "CCTV1", 0)
+
+	dao.DB.Model(&models.IptvEpg{}).Where("id = ?", epgID).Update("blacklist", "CCTV1")
+	BindChannel()
+
+	if got := channelEpgID(t, chID); got != 0 {
+		t.Fatalf("频道 epg_id = %d，期望 0（黑名单压过手动名单）", got)
+	}
+}
+
+// TestBlacklistAllowsFutureChannel 守住"黑名单能先录库里还没有的频道名"。
+//
+// 用户先录一个还没导入的台名，等频道导入后它就该被排除。
+func TestBlacklistAllowsFutureChannel(t *testing.T) {
+	setupBindDB(t)
+
+	caID := newBindCategory(t, "央视", "add", true)
+	epgID := newBindEpg(t, "台子A", "台子A|将来才有的台", "")
+	chID := newBindChannel(t, caID, "将来才有的台", 0)
+
+	dao.DB.Model(&models.IptvEpg{}).Where("id = ?", epgID).Update("blacklist", "将来才有的台")
+	BindChannel()
+
+	if got := channelEpgID(t, chID); got != 0 {
+		t.Fatalf("频道 epg_id = %d，期望 0（预先拉黑的台导入后也不该绑）", got)
+	}
+}
+
+// TestBlacklistNotInBoundNames 守住"拉黑的台不出现在绑定名单里"。
+//
+// ⚠️ 拉黑是按**归一化**的名字匹配的（与绑定判定同一个 NormalizeChannelKey）：
+// "CCTV-1" 归一化后是 "CCTV1"，跟 "CCTV1" 是同一个名字 ⇒ 拉黑 "CCTV-1"
+// 会连带排除 "CCTV1"。所以这里用两个归一化后**不同**的名字来验。
+func TestBlacklistNotInBoundNames(t *testing.T) {
+	setupBindDB(t)
+
+	caID := newBindCategory(t, "央视", "add", true)
+	epgID := newBindEpg(t, "央视一套", "央视一套|湖南卫视", "")
+	newBindChannel(t, caID, "央视一套", 0)
+	newBindChannel(t, caID, "湖南卫视", 0)
+
+	dao.DB.Model(&models.IptvEpg{}).Where("id = ?", epgID).Update("blacklist", "湖南卫视")
+	BindChannel()
+
+	got := epgBoundNames(t, epgID)
+	if strings.Contains(got, "湖南卫视") {
+		t.Fatalf("bound_names = %q，期望不含被拉黑的 湖南卫视", got)
+	}
+	if !strings.Contains(got, "央视一套") {
+		t.Fatalf("bound_names = %q，期望仍含 央视一套", got)
+	}
+}
+
+// TestBlacklistFollowsNormalizedName 守住"拉黑按归一化名生效"。
+//
+// "CCTV-1" 与 "CCTV1" 归一化后同名 ⇒ 拉黑一个等于拉黑另一个。
+// 这与绑定判定用的归一化保持一致 —— 否则会出现"名单里没有它却照样绑上"，
+// 用户会发现黑名单形同虚设。
+func TestBlacklistFollowsNormalizedName(t *testing.T) {
+	setupBindDB(t)
+
+	caID := newBindCategory(t, "央视", "add", true)
+	epgID := newBindEpg(t, "CCTV1", "CCTV1|CCTV-1", "")
+	chID := newBindChannel(t, caID, "CCTV1", 0)
+
+	// 拉黑的是 "CCTV-1"，频道名却是 "CCTV1"。
+	dao.DB.Model(&models.IptvEpg{}).Where("id = ?", epgID).Update("blacklist", "CCTV-1")
+	BindChannel()
+
+	if got := channelEpgID(t, chID); got != 0 {
+		t.Fatalf("频道 epg_id = %d，期望 0（CCTV-1 与 CCTV1 归一化后同名）", got)
+	}
+}
