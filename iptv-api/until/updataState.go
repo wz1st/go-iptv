@@ -327,7 +327,7 @@ func FinishUpdataOnBoot() {
 	if st.Phase == UpdataPhaseFailed {
 		return
 	}
-	log.Printf("启动时收尾升级状态：上一轮停在 %s（%d%%），进程能起来即视为替换完成", st.Phase, st.Percent)
+	//log.Printf("启动时收尾升级状态：上一轮停在 %s（%d%%），进程能起来即视为替换完成", st.Phase, st.Percent)
 	writeUpdataState(updataState{
 		Kind: st.Kind, Phase: UpdataPhaseDone, Percent: 100,
 		Msg: "升级已完成，管理系统已重启", Version: st.Version,

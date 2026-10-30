@@ -774,7 +774,7 @@ func writeBackEpgBoundNames(epgs []models.IptvEpg, bound map[int64]map[string]st
 			log.Printf("⚠️ 回写 EPG %d 的绑定频道名单失败: %v", epg.ID, err)
 			continue
 		}
-		log.Printf("EPG %d(%s) 的绑定频道名单已更新：%d 个频道", epg.ID, epg.Name, len(uniq))
+		//log.Printf("EPG %d(%s) 的绑定频道名单已更新：%d 个频道", epg.ID, epg.Name, len(uniq))
 	}
 }
 

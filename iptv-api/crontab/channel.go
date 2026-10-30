@@ -119,7 +119,7 @@ func Crontab() {
 	cronSt.running = true
 	cronSt.mu.Unlock()
 
-	log.Println("定时任务服务启动（按源独立间隔更新）...")
+	log.Println("定时任务服务启动...")
 	defer func() {
 		cronSt.mu.Lock()
 		cronSt.running = false
