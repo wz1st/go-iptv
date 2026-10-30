@@ -448,32 +448,6 @@ func (bi *bindIndex) resolve(channelName string) int64 {
 	return 0
 }
 
-// EpgNameMatcher 是"频道名 -> 目标 EPG"的规则表。
-//
-// 一次性建好、批量判定用：手动绑定弹窗要问"这一串频道名分别归谁"，
-// 逐个查库会打出成百上千条 SQL。
-type EpgNameMatcher struct {
-	bi *bindIndex
-}
-
-// NewEpgNameMatcher 用当前启用中的 EPG 建好规则表。
-func NewEpgNameMatcher() *EpgNameMatcher {
-	var epgList []models.IptvEpg
-	if err := dao.DB.Model(&models.IptvEpg{}).Where("status = 1").Order("id asc").Find(&epgList).Error; err != nil {
-		log.Println("建立EPG绑定规则表失败:", err)
-		return &EpgNameMatcher{bi: buildBindIndex(nil)}
-	}
-	return &EpgNameMatcher{bi: buildBindIndex(epgList)}
-}
-
-// Resolve 返回该频道名应绑定的 EPG ID（0 = 没有任何规则命中）。
-func (m *EpgNameMatcher) Resolve(channelName string) int64 {
-	if m == nil || m.bi == nil {
-		return 0
-	}
-	return m.bi.resolve(channelName)
-}
-
 // bindNameBatch 是 `name IN (...)` 的分块大小。
 const bindNameBatch = 400
 
@@ -727,6 +701,97 @@ func MergeBoundChannelNames(manual, auto string) string {
 	add(manual)
 	add(auto)
 	return strings.Join(out, ",")
+}
+
+// EpgBoundDisplay 返回某个 EPG 在管理端「绑定频道」列里要显示的名单。
+//
+// = 手动名单（Content）∪ 自动绑定结果（BoundNames），并**排除黑名单**里的台。
+//
+// 为什么要排除黑名单：拉黑的语义是"这个 EPG 不要这个台"，重算后它会被解绑；
+// 但 BoundNames 是上一次重算的结果 —— 重算跑完前它还留着那个台。
+// 展示上留着它，用户会以为"拉黑没生效"。
+//
+// 与列表接口（api/spaListApi.go）用的是同一套口径 —— 两边必须一致，
+// 否则"手动绑定保存后立刻显示的那一行"和"刷新页面看到的"会对不上。
+func EpgBoundDisplay(epg models.IptvEpg) string {
+	merged := MergeBoundChannelNames(epg.Content, epg.BoundNames)
+	return ExcludeBlacklisted(merged, epg.Blacklist)
+}
+
+// EpgManualNames 返回该 EPG 的**手动名单**（Content 去掉黑名单里的台）。
+//
+// 这是"用户手动指定的台"，与自动结果无关。
+// 手动绑定弹窗里的「手动绑定频道」多选框预选的正是它 ——
+// 若预选的是"全部认领的台"，用户不改直接点确定，
+// 就等于把自动匹配上的台**固化成手动名单**（content 优先级最高），
+// 之后自动规则改了也不再生效（这正是 v4.10.6 要避免的"旧结果钉死频道"）。
+func EpgManualNames(epg models.IptvEpg) []string {
+	return SplitBoundNames(ExcludeBlacklisted(epg.Content, epg.Blacklist))
+}
+
+// EpgBoundNames 返回该 EPG **认领的全部台名**（手动 ∪ 自动 − 黑名单）。
+//
+// 与列表页「绑定频道」列（EpgBoundDisplay）**逐字同口径**。
+//
+// 为什么要有这个函数：「手动绑定频道」弹窗里的「已绑定的频道」（拖拽源）
+// 以前是"遍历 iptv_channels 表 + 规则判定"得到的 ——
+// 手动名单里那些**库里还没有对应频道**的台名（用户手输的）在它眼里不存在，
+// 于是列表列显示它、弹窗里却没有 ⇒ 用户看到"列表说绑着、弹窗说没绑"。
+// 改成与列表列同源，这个矛盾就没了。
+func EpgBoundNames(epg models.IptvEpg) []string {
+	return SplitBoundNames(EpgBoundDisplay(epg))
+}
+
+// SplitBoundNames 把逗号分隔的名单拆成去空、去重、保序的切片。
+func SplitBoundNames(s string) []string {
+	out := make([]string, 0, 8)
+	seen := make(map[string]struct{}, 8)
+	for _, n := range strings.Split(s, ",") {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	return out
+}
+
+// ExcludeBlacklisted 从一份频道名名单里摘掉黑名单里的台。
+//
+// 比较用归一化键（NormalizeChannelKey）—— 与绑定判定（bindIndex.isBlacklisted）
+// 同一套口径：黑名单里写 "CCTV-1" 也会把 "CCTV1" 摘掉。
+// 两套口径不一致 ⇒ 展示说"绑着"、判定说"没绑"，用户看到的和实际生效的对不上。
+func ExcludeBlacklisted(names, blacklist string) string {
+	if strings.TrimSpace(blacklist) == "" {
+		return names
+	}
+
+	black := make(map[string]struct{}, 4)
+	for _, n := range strings.Split(blacklist, ",") {
+		if k := NormalizeChannelKey(n); k != "" {
+			black[k] = struct{}{}
+		}
+	}
+	if len(black) == 0 {
+		return names
+	}
+
+	kept := make([]string, 0, 8)
+	for _, n := range strings.Split(names, ",") {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, bad := black[NormalizeChannelKey(n)]; bad {
+			continue
+		}
+		kept = append(kept, n)
+	}
+	return strings.Join(kept, ",")
 }
 
 // writeBackEpgBoundNames 把"当前真正绑到每个 EPG 的频道名"写回 iptv_epg.bound_names。
