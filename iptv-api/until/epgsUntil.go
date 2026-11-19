@@ -23,7 +23,7 @@ import (
 func ConvertCntvToXml(cntv dto.CntvJsonChannel, eName string) dto.XmlTV {
 	tv := dto.XmlTV{
 		GeneratorName: "清和IPTV管理系统",
-		GeneratorURL:  "https://www.qingh.xyz",
+		GeneratorURL:  "https://www.wqhe.cn",
 	}
 
 	// 添加频道
@@ -1212,7 +1212,7 @@ func CleanTV(tv *dto.XmlTV) {
 func GetEpgXml(channelList []models.IptvChannelShow) dto.XmlTV {
 	epgXml := dto.XmlTV{
 		GeneratorName: "清和IPTV管理系统",
-		GeneratorURL:  "https://www.qingh.xyz",
+		GeneratorURL:  "https://www.wqhe.cn",
 	}
 
 	// ===== 核心缓存 =====

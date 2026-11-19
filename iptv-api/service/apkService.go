@@ -174,7 +174,7 @@ func ApkLogin(user models.IptvUser, base, shell string) dto.LoginRes {
 	result.TipUserNoReg = "当前账号 " + user.Name + " " + cfg.Tips.UserNoReg
 	result.TipUserExpired = "当前账号 " + user.Name + " " + cfg.Tips.UserExpired
 	result.TipUserForbidden = "当前账号 " + user.Name + " " + cfg.Tips.UserForbidden
-	result.AdInfo = "作者博客: www.qingh.xyz"
+	result.AdInfo = "作者博客: www.wqhe.cn"
 	// RandKey 参与频道数据解密。存量账号是随机数字串（如 "210079"），
 	// 改类型后拼接结果与旧的 strconv.FormatInt(name, 10) **逐字相同**，
 	// 所以存量设备换到新二进制后仍能解开自己那份数据 —— 这条不能动。

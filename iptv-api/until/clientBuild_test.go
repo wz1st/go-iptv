@@ -270,11 +270,11 @@ func TestPatchClientHostInSmali_NoMatchIsFatal(t *testing.T) {
 func TestPatchClientHostInSmali_RewritesApkLtLiterals(t *testing.T) {
 	work := t.TempDir()
 	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
-		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n"+
+		"    const-string v0, \"https://iptv.wqhe.cn/apk/lt\"\n"+
 			"    sput-object v0, Lcom/eztv/powerful/SplashActivity;->n:Ljava/lang/String;\n")
 	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity.smali",
-		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt/weather\"\n"+
-			"    const-string v0, \"https://iptv.qingh.xyz/apk/lt/getepg\"\n")
+		"    const-string v0, \"https://iptv.wqhe.cn/apk/lt/weather\"\n"+
+			"    const-string v0, \"https://iptv.wqhe.cn/apk/lt/getepg\"\n")
 	// 真实存在于骆驼壳里的分享文案：以中文开头，结尾恰好是 …/iptv。
 	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity$50.smali",
 		"    const-string v2, \"\\u6211\\u5728\\u4f7f\\u7528 https://github.com/wz1st/iptv\"\n")
@@ -301,7 +301,7 @@ func TestPatchClientHostInSmali_RewritesApkLtLiterals(t *testing.T) {
 			t.Errorf("缺少 %s\n实际:\n%s", want, string(player))
 		}
 	}
-	if strings.Contains(string(player), "iptv.qingh.xyz") {
+	if strings.Contains(string(player), "iptv.wqhe.cn") {
 		t.Errorf("旧站点地址残留:\n%s", string(player))
 	}
 	// 反向断言：分享文案必须原样保留 —— 它正是被误改过的那个串。
@@ -320,9 +320,9 @@ func TestPatchClientHostInSmali_RewritesApkLtLiterals(t *testing.T) {
 func TestPatchClientHostInSmali_JumboVariantIsRewritten(t *testing.T) {
 	work := t.TempDir()
 	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
-		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n")
+		"    const-string v0, \"https://iptv.wqhe.cn/apk/lt\"\n")
 	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity.smali",
-		"    const-string/jumbo v0, \"https://iptv.qingh.xyz/apk/lt/getepg\"\n")
+		"    const-string/jumbo v0, \"https://iptv.wqhe.cn/apk/lt/getepg\"\n")
 
 	if err := patchClientHostInSmali(work, "http://10.10.220.162:18098/apk/lt"); err != nil {
 		t.Fatalf("jumbo 地址应当被替换: %v", err)
@@ -334,7 +334,7 @@ func TestPatchClientHostInSmali_JumboVariantIsRewritten(t *testing.T) {
 	if !strings.Contains(string(jumbo), `"http://10.10.220.162:18098/apk/lt/getepg"`) {
 		t.Errorf("jumbo 地址未被替换:\n%s", string(jumbo))
 	}
-	if strings.Contains(string(jumbo), "iptv.qingh.xyz") {
+	if strings.Contains(string(jumbo), "iptv.wqhe.cn") {
 		t.Errorf("旧站点地址残留:\n%s", string(jumbo))
 	}
 }
@@ -344,10 +344,10 @@ func TestPatchClientHostInSmali_JumboVariantIsRewritten(t *testing.T) {
 func TestPatchClientHostInSmali_SubPathIsNotLeftover(t *testing.T) {
 	work := t.TempDir()
 	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
-		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n")
+		"    const-string v0, \"https://iptv.wqhe.cn/apk/lt\"\n")
 	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity.smali",
-		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt/weather\"\n"+
-			"    const-string v0, \"https://iptv.qingh.xyz/apk/lt/getepg\"\n")
+		"    const-string v0, \"https://iptv.wqhe.cn/apk/lt/weather\"\n"+
+			"    const-string v0, \"https://iptv.wqhe.cn/apk/lt/getepg\"\n")
 
 	if err := patchClientHostInSmali(work, "http://10.10.220.162:18098/apk/lt"); err != nil {
 		t.Fatalf("子路径形态不该被判成残留: %v", err)
@@ -370,22 +370,22 @@ func TestPatchClientHostInSmali_DollarIsLiteral(t *testing.T) {
 // ★ 同址注入：基底是 CI 打好地址的成品包，页面又填了同一个站点。
 // 替换是恒等变换、字节一个不变，早期按「字节是否变化」计命中，于是把
 // 「注入点就在这儿」判成「一个注入点都没找到」，编译失败且报错指向基底。
-// 生产 v4.7.1 + 0.33.0 基底 + 填 https://iptv.qingh.xyz 即踩这个坑。
+// 生产 v4.7.1 + 0.33.0 基底 + 填 https://iptv.wqhe.cn 即踩这个坑。
 func TestPatchClientHostInSmali_SameAddressAsBaseStillCounts(t *testing.T) {
 	work := t.TempDir()
 	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
-		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n")
+		"    const-string v0, \"https://iptv.wqhe.cn/apk/lt\"\n")
 	writeSmali(t, work, "smali/com/eztv/powerful/PlayerActivity.smali",
-		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt/getepg\"\n")
+		"    const-string v0, \"https://iptv.wqhe.cn/apk/lt/getepg\"\n")
 
-	if err := patchClientHostInSmali(work, "https://iptv.qingh.xyz/apk/lt"); err != nil {
+	if err := patchClientHostInSmali(work, "https://iptv.wqhe.cn/apk/lt"); err != nil {
 		t.Fatalf("同址注入必须成功，不能报成找不到注入点: %v", err)
 	}
 	b, err := os.ReadFile(filepath.Join(work, "smali", "com", "eztv", "powerful", "PlayerActivity.smali"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"https://iptv.qingh.xyz/apk/lt/getepg"`) {
+	if !strings.Contains(string(b), `"https://iptv.wqhe.cn/apk/lt/getepg"`) {
 		t.Errorf("子路径后缀应原样保留:\n%s", string(b))
 	}
 }
@@ -395,9 +395,9 @@ func TestPatchClientHostInSmali_SameAddressAsBaseStillCounts(t *testing.T) {
 func TestPatchClientHostInSmali_SameAddressWithTrailingSlash(t *testing.T) {
 	work := t.TempDir()
 	writeSmali(t, work, "smali/com/eztv/powerful/SplashActivity.smali",
-		"    const-string v0, \"https://iptv.qingh.xyz/apk/lt\"\n")
+		"    const-string v0, \"https://iptv.wqhe.cn/apk/lt\"\n")
 
-	if err := patchClientHostInSmali(work, "https://iptv.qingh.xyz/apk/lt/"); err != nil {
+	if err := patchClientHostInSmali(work, "https://iptv.wqhe.cn/apk/lt/"); err != nil {
 		t.Fatalf("带尾斜杠的同址注入必须成功: %v", err)
 	}
 }
