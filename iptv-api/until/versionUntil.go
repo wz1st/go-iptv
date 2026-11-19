@@ -405,4 +405,11 @@ package until
 //	用户会以为"拉黑没生效"。
 //	比较用归一化键（NormalizeChannelKey），与绑定判定（bindIndex.isBlacklisted）
 //	同一套口径：黑名单里写 "CCTV-1" 也能挡住 "CCTV1"。
-var Version = "v4.10.9"
+//
+// v4.11.0（域名迁移 qingh.xyz → wqhe.cn，动了 api + 前端 + 引擎 + apk 基底四类 ⇒ 大改动进第二段）：
+// 全仓域名统一换成 wqhe.cn。授权接口 auth.qingh.xyz 的跳转必须是 307/308——
+// 引擎 6 个授权调用全是 POST 表单，301/302 会把 POST 降级成 GET 并清空 body，
+// 老版本引擎会因此授权失败；307 保留方法与 body，兼容存量引擎。
+// 唯一例外：mytv 基底注入的替换搜索位保留 qingh.xyz|wqhe.cn 双域名，
+// 因为存量基底 APK 里写死的仍是旧域名，只认新域名会导致替换失败。
+var Version = "v4.11.0"
