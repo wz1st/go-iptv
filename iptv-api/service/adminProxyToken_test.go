@@ -61,7 +61,20 @@ func TestProxyTestTokenRoundTrip(t *testing.T) {
 	}
 
 	// 载荷被改 ⇒ 验不过
-	bad := tok[:len(tok)-1] + "0"
+	//
+	// ★末位不能写死 '0'：凭据是随机签发的，末位恰为 '0' 的概率约 1/16，
+	// 那时"改一位"得到的就是原凭据本身，测的其实是"原样"而不是"篡改"，
+	// 断言会假性失败（CI 上表现为这条测试偶发挂）。所以要挑一个
+	// 确实与原字符不同的十六进制位。
+	last := tok[len(tok)-1]
+	repl := byte('0')
+	if last == repl {
+		repl = '1'
+	}
+	bad := tok[:len(tok)-1] + string(repl)
+	if bad == tok {
+		t.Fatal("篡改后的凭据与原凭据相同，测的就不是篡改")
+	}
 	if _, ok := verifyProxyTestToken(bad, fp); ok {
 		t.Error("被篡改的凭据必须验不过")
 	}
