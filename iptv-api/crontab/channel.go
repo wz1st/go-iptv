@@ -119,7 +119,7 @@ func Crontab() {
 	cronSt.running = true
 	cronSt.mu.Unlock()
 
-	log.Println("定时任务服务启动（按源独立间隔更新）...")
+	log.Println("定时任务服务启动...")
 	defer func() {
 		cronSt.mu.Lock()
 		cronSt.running = false
@@ -321,7 +321,6 @@ func GenreChannels(srclist string, list models.IptvCategoryList, doRepeat, group
 			if err := dao.DB.Create(&category).Error; err != nil {
 				continue
 			}
-			until.SyncCaToEpg(category.ID)
 			until.AddChannelList(genreList.SrcList, category.ID, list.ID, doRepeat)
 		} else {
 			until.AddChannelList(genreList.SrcList, category.ID, list.ID, doRepeat)

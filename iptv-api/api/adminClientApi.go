@@ -113,7 +113,7 @@ func ClientTipSet(c *gin.Context) {
 }
 
 // ClientAdInfo 保存客户端退出弹窗里的「广告内容」—— **custom 定制**，仅定制授权可写。
-// POST /api/client/adInfo  {"adInfo":"作者博客: www.qingh.xyz"}
+// POST /api/client/adInfo  {"adInfo":"作者博客: www.wqhe.cn"}
 func ClientAdInfo(c *gin.Context) {
 	var req dto.ClientAdInfoReq
 	if !bindJSON(c, &req) {

@@ -314,6 +314,18 @@ func EpgsData(c *gin.Context) {
 			}
 		}
 		pageData.Epgs[k].FromName = strings.TrimRight(pageData.Epgs[k].FromName, ",")
+
+		// 「绑定频道」那一列显示的是 content —— 这里把**手动绑定名单**
+		// 与**自动绑定的结果清单**合并后返回，前端不用改。
+		// 两个来源分开存（content / bound_names）是为了判定不受自动结果影响，
+		// 但展示时用户要看到的是"这个 EPG 当前绑着哪些台"的完整清单。
+		//
+		// 走 EpgBoundDisplay（而不是裸的 MergeBoundChannelNames）：
+		// 它会把**黑名单**里的台摘掉 —— 拉黑的语义就是"这个 EPG 不要这个台"，
+		// 展示上留着它，用户会以为拉黑没生效。
+		// 手动绑定保存后前端是**就地更新那一行**的（不等整页刷新），
+		// 两边必须用同一个函数，否则"保存后看到的"和"刷新后看到的"会对不上。
+		pageData.Epgs[k].Content = until.EpgBoundDisplay(pageData.Epgs[k])
 	}
 
 	c.JSON(200, pageData)

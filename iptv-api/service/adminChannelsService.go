@@ -190,7 +190,6 @@ func AddList(req dto.ChannelsListReq) dto.ReturnJsonDto {
 			AutoRename: iptvCategoryList.AutoRename,
 		}
 		dao.DB.Model(&models.IptvCategory{}).Create(&iptvCategory)
-		until.SyncCaToEpg(iptvCategory.ID)
 		repeat, err := until.AddChannelList(urlData, iptvCategory.ID, iptvCategoryList.ID, doRepeat)
 		if err == nil {
 			return dto.ReturnJsonDto{Code: 1, Msg: fmt.Sprintf("更新列表 %s 成功，重复 %d 条\n", listName, repeat), Type: "success"}
@@ -281,7 +280,6 @@ func UpdateList(req dto.ReqID) dto.ReturnJsonDto {
 					AutoRename: iptvCategoryList.AutoRename,
 				}
 				dao.DB.Model(&models.IptvCategory{}).Create(&oldC)
-				until.SyncCaToEpg(oldC.ID)
 			}
 
 			repeat, err := until.AddChannelList(urlData, oldC.ID, iptvCategoryList.ID, doRepeat)
@@ -313,7 +311,6 @@ func UpdateList(req dto.ReqID) dto.ReturnJsonDto {
 				AutoRename: iptvCategoryList.AutoRename,
 			}
 			dao.DB.Model(&models.IptvCategory{}).Create(&oldC)
-			until.SyncCaToEpg(oldC.ID)
 		}
 
 		repeat, err := until.AddChannelList(urlData, oldC.ID, iptvCategoryList.ID, doRepeat)
@@ -342,9 +339,6 @@ func DelList(req dto.ReqID) dto.ReturnJsonDto {
 	dao.DB.Model(&models.IptvCategory{}).
 		Where("source_id = ?", iptvCategoryList.ID).
 		Pluck("id", &ids)
-	for _, id := range ids {
-		go until.RemoveCaFromEpg(id)
-	}
 	dao.DB.Where("source_id = ?", iptvCategoryList.ID).Delete(&models.IptvCategory{})
 	dao.DB.Where("source_id = ?", iptvCategoryList.ID).Delete(&models.IptvChannel{})
 	// 这个源下的分组全没了 ⇒ 受影响的套餐就是"引用了这些分组"的那些。
@@ -365,7 +359,6 @@ func DelCa(req dto.ReqID) dto.ReturnJsonDto {
 
 	dao.DB.Model(&models.IptvCategory{}).Where("id = ?", category.ID).Delete(&models.IptvCategory{})
 	dao.DB.Model(&models.IptvChannel{}).Where("category_id = ?", category.ID).Delete(&models.IptvChannel{})
-	go until.RemoveCaFromEpg(category.ID)
 	go until.RequestChannelRefreshFor(category.ID)
 	return dto.ReturnJsonDto{Code: 1, Msg: fmt.Sprintf("删除频道 %s 成功\n", category.Name), Type: "success"}
 }
@@ -572,7 +565,6 @@ func GenreChannels(srclist string, caList models.IptvCategoryList, doRepeat, gro
 			if err := dao.DB.Create(&category).Error; err != nil {
 				return dto.ReturnJsonDto{Code: 0, Msg: fmt.Sprintf("新增分类 %s 失败\n", categoryName), Type: "danger"}
 			}
-			until.SyncCaToEpg(category.ID)
 			a, err := until.AddChannelList(genreList.SrcList, category.ID, caList.ID, doRepeat)
 			if err != nil {
 				log.Println(fmt.Sprintf("新增分类 %s 失败\n", categoryName), err)
@@ -736,7 +728,6 @@ func UploadPayList(c *gin.Context) dto.ReturnJsonDto {
 		dao.DB.Model(&models.IptvCategory{}).Select("IFNULL(MAX(sort),0)").Scan(&maxSort)
 		var new = models.IptvCategory{Name: listName, Type: "file", Sort: maxSort + 1, AutoRename: true}
 		dao.DB.Model(&models.IptvCategory{}).Create(&new)
-		until.SyncCaToEpg(new.ID) // 同步写入 EPG 归属：必须早于 AddChannelList 触发的重绑
 
 		repeat, err := until.AddChannelList(urlData, new.ID, 0, false)
 		if err == nil {
@@ -808,7 +799,6 @@ func SaveCategory(req dto.ChannelsCategoryReq) dto.ReturnJsonDto {
 			// 聚合分组的频道由引擎按规则生成 ⇒ 作废聚合缓存 + 重算绑定。
 			go until.RequestChannelRefreshFor(new.ID)
 		} else {
-			until.SyncCaToEpg(new.ID)
 		}
 	} else {
 		caIdInt := caId
@@ -866,7 +856,6 @@ func SaveCategory(req dto.ChannelsCategoryReq) dto.ReturnJsonDto {
 		dao.Cache.Delete(proxyCaCheck)
 
 		if strings.Contains(ca.Type, "auto") {
-			go until.RemoveCaFromEpg(caIdInt)
 			// 聚合分组的规则/类型变了 ⇒ 聚合缓存作废 + 绑定重算。
 			go until.RequestChannelRefreshFor(caIdInt)
 		} else {

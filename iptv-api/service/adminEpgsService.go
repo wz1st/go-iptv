@@ -27,9 +27,9 @@ func GetChName(req dto.ReqID) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "查询EPG 失败", Type: "danger"}
 	}
 
-	// 2026-10-29：不再按 epg.Cas（自动绑定的分组）过滤候选频道。
+	// 2026-10-29：不再按分组过滤候选频道。
 	// 绑定已经改成"全局按频道名判定"，候选集就应该是**全部**频道名 ——
-	// 否则用户在一个没被认领的分组里，想手动绑定某个台都做不到。
+	// 否则用户想手动绑定某个台都做不到。
 	var channeList []models.IptvChannel
 	if err := dao.DB.Model(&models.IptvChannel{}).
 		Select("distinct name").
@@ -39,22 +39,53 @@ func GetChName(req dto.ReqID) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "查询频道失败", Type: "danger"}
 	}
 
-	// 判定"已绑定"要走与 BindChannel 同一套规则（手动名单 > EPG 名 > 别名），
-	// 否则弹窗里勾上的状态与真正落库的结果会对不上。
-	matcher := until.NewEpgNameMatcher()
-
-	var dataList []dto.EpgsReturnDto
-
-	for _, v := range channeList {
-		var data dto.EpgsReturnDto
-		data.Name = v.Name
-		data.Value = v.Name
-		// 命中本 EPG 的规则 ⇒ 已绑定（勾上）。
-		data.Selected = matcher.Resolve(v.Name) == epgId
-		dataList = append(dataList, data)
+	// 黑名单：这个 EPG 不要的台。名单里可能有库里根本没有的名字
+	//（用户手动输入的，供后续频道导入后直接生效），所以它与频道列表分开给。
+	blackSet := make(map[string]struct{})
+	blacklist := make([]string, 0, 8)
+	for _, n := range strings.Split(epg.Blacklist, ",") {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, dup := blackSet[n]; dup {
+			continue
+		}
+		blackSet[n] = struct{}{}
+		blacklist = append(blacklist, n)
 	}
 
-	return dto.ReturnJsonDto{Code: 1, Msg: "操作成功", Type: "success", Data: dataList}
+	channels := make([]string, 0, len(channeList))
+	for _, v := range channeList {
+		if _, black := blackSet[v.Name]; black {
+			// 已在排除名单里的台不再出现在候选里（否则能同时"绑定"和"排除"）。
+			continue
+		}
+		channels = append(channels, v.Name)
+	}
+
+	// ★「已绑定的频道」（弹窗里的拖拽源）改成**与列表页「绑定频道」列同源**。
+	//
+	// 以前这里是"遍历 iptv_channels 表 + matcher.Resolve 判定"：
+	// 手动名单里那些**库里还没有对应频道**的台名（用户手输的）在它眼里根本不存在
+	// ⇒ 列表列显示它、弹窗里却没有 ⇒ 用户看到"列表说绑着、弹窗说没绑"（实测）。
+	//
+	// 现在直接用 until.EpgBoundNames（= 手动 ∪ 自动 − 黑名单，与列表列逐字同口径）。
+	// 顺带把「手动绑定频道」多选框的预选从"全部认领的台"改成**手动名单**：
+	// 否则用户不改直接点确定，就把自动匹配上的台固化成手动名单了
+	// （content 优先级最高，之后自动规则改了也不生效 —— v4.10.6 要避免的）。
+	selected := until.EpgBoundNames(epg)
+	manual := until.EpgManualNames(epg)
+
+	return dto.ReturnJsonDto{
+		Code: 1, Msg: "操作成功", Type: "success",
+		Data: dto.EpgBindableDto{
+			Channels:  channels,
+			Selected:  selected,
+			Manual:    manual,
+			Blacklist: blacklist,
+		},
+	}
 }
 
 func SaveEpg(req dto.EpgSaveReq) dto.ReturnJsonDto {
@@ -77,21 +108,6 @@ func SaveEpg(req dto.EpgSaveReq) dto.ReturnJsonDto {
 	epgData.Remarks = req.Remarks
 
 	epgData.FromList = req.FromList
-	// 2026-10-29：cas（"这个 EPG 认领哪些分组"）不再由前端指定 ——
-	// 绑定判定已经取消 caID 限制，前端那个分组多选框也已一并去掉。
-	//
-	// 但 cas 这个字段**不能删**：引擎侧的 EPG 模糊识别（iptv-engine 的
-	// CheckChEpg）仍按它筛"这个 EPG 能认领哪些分组"，那是另一个独立操作，
-	// 不在本次改动范围内。所以这里改为**服务端自动维护**：
-	//   - 新建 EPG ⇒ 认领全部启用的非聚合分组（与 SyncEpgs 新增 EPG 时一致）；
-	//   - 改 EPG ⇒ 保持原值不动（分组增减由 SyncCaToEpg / RemoveCaFromEpg 负责）。
-	if id == 0 {
-		var caIDs []int64
-		dao.DB.Model(&models.IptvCategory{}).
-			Where("enable = 1 AND type not like ?", "auto%").
-			Pluck("id", &caIDs)
-		epgData.Cas = strings.Trim(strings.Join(strings.Fields(fmt.Sprint(caIDs)), ","), "[]")
-	}
 
 	if err := dao.DB.Save(&epgData).Error; err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "保存EPG失败", Type: "danger"}
@@ -118,13 +134,34 @@ func BdingEpg(req dto.EpgBindReq) dto.ReturnJsonDto {
 		return dto.ReturnJsonDto{Code: 0, Msg: "查询EPG失败", Type: "danger"}
 	}
 
-	oldList := strings.Split(epgData.Content, ",")
+	// 黑名单（排除名单）：这个 EPG 不要的台。
+	// 允许"库里还没有的名字"—— 用户先录进去，等频道导入后自动生效。
+	blackList := until.RemoveEmptyStrings(strings.Split(req.Blacklist, ","))
 
-	if until.EqualStringSets(oldList, namesList) {
-		return dto.ReturnJsonDto{Code: 0, Msg: "EPG " + epgData.Name + "绑定未修改", Type: "success"}
+	oldList := strings.Split(epgData.Content, ",")
+	oldBlack := strings.Split(epgData.Blacklist, ",")
+
+	bindSame := until.EqualStringSets(oldList, namesList)
+	blackSame := until.EqualStringSets(oldBlack, blackList)
+	if bindSame && blackSame {
+		// 名单没变 —— 但"绑定频道"列显示的是「手动 ∪ 自动」，
+		// 自动那部分可能被后台重算改过，所以照样要把**当前**名单回给前端，
+		// 否则前端保留旧值，与刷新页面看到的对不上。
+		//
+		// 这里也要重读一遍：epgData 是本函数开头读到的快照，
+		// 它的 bound_names 可能已被后台重算改过。
+		var fresh models.IptvEpg
+		if err := dao.DB.First(&fresh, "id = ?", epgData.ID).Error; err == nil {
+			epgData = fresh
+		}
+		return dto.ReturnJsonDto{
+			Code: 1, Msg: "EPG " + epgData.Name + "绑定未修改", Type: "success",
+			Data: dto.EpgBindResultDto{ID: epgData.ID, Bound: until.EpgBoundDisplay(epgData)},
+		}
 	}
 
 	epgData.Content = strings.Join(namesList, ",")
+	epgData.Blacklist = strings.Join(blackList, ",")
 
 	if err := dao.DB.Save(&epgData).Error; err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "保存EPG失败", Type: "danger"}
@@ -134,7 +171,32 @@ func BdingEpg(req dto.EpgBindReq) dto.ReturnJsonDto {
 		until.ReleaseNamesFromOtherEpgs(epgData.ID, namesList)
 		until.RequestChannelRefresh()
 	}()
-	return dto.ReturnJsonDto{Code: 1, Msg: "EPG " + epgData.Name + "保存成功", Type: "success"}
+	// ★把这一行当前的绑定名单回给前端，让它**就地更新那一行**，
+	// 不用等后台重算完再刷新整页。
+	//
+	// 为什么现在就能算准：这里算的是"手动名单 ∪ 自动结果"，其中
+	//   - 手动名单 = 刚落库的 namesList；
+	//   - 自动结果 = bound_names（自动绑定的结果清单）。
+	// 后台重算会把 bound_names 刷成最新的，但那要等几百毫秒；
+	// 眼下这一行的"手动 ∪ 自动"已经够用户确认"我绑的台在不在列表里"。
+	//
+	// ★为什么保存后要**重新读一遍**而不是直接用 epgData：
+	// epgData 是保存**前**读出来的快照，它的 bound_names 可能已经被
+	// 后台重算改过了（重算会全量重写 bound_names）。用快照算出来的串
+	// 就可能与列表接口当下读到的值对不上 —— 而这两个值必须一致，
+	// 否则用户会看到"保存后这一行显示的"与"刷新页面看到的"不一样。
+	// 重新读一次 ⇒ 拿到的就是列表接口此刻会读到的同一份数据。
+	var fresh models.IptvEpg
+	if err := dao.DB.First(&fresh, "id = ?", epgData.ID).Error; err == nil {
+		epgData = fresh
+	}
+	//
+	// 黑名单里的台要排除掉（拉黑 = 这个 EPG 不要这个台），
+	// 与列表接口（api/spaListApi.go）用的是同一个函数，两端口径必须一致。
+	return dto.ReturnJsonDto{
+		Code: 1, Msg: "EPG " + epgData.Name + "保存成功", Type: "success",
+		Data: dto.EpgBindResultDto{ID: epgData.ID, Bound: until.EpgBoundDisplay(epgData)},
+	}
 }
 
 func ChangeStatus(req dto.ReqID) dto.ReturnJsonDto {
@@ -189,17 +251,37 @@ func DeleteEpg(req dto.ReqID) dto.ReturnJsonDto {
 	if id <= 18 {
 		return dto.ReturnJsonDto{Code: 0, Msg: "CNTV EPG不能删除", Type: "danger"}
 	}
+	// ★先把它挂着的频道解绑，再删 EPG 那一行。
+	// 少了这一步，频道的 epg_id 会指向一条已经不存在的 EPG（悬空 id）：
+	// 重算绑定时"没有规则命中"的频道是**保持原样**的，不会自动归零，
+	// 于是那些频道永远挂着一个查不到节目单的幽灵 EPG。
+	res := dao.DB.Model(&models.IptvChannel{}).Where("epg_id = ?", id).Update("epg_id", 0)
+	unbound := res.RowsAffected
 	dao.DB.Where("id = ?", id).Delete(&models.IptvEpg{})
 	// 删掉的 EPG 可能还挂着一批频道的 epg_id：重算一次让它们回落到别的认领者
 	// 或 0，不要留下指向已删行的悬空 id。
 	until.RequestChannelRefresh()
+	if unbound > 0 {
+		return dto.ReturnJsonDto{
+			Code: 1,
+			Msg:  fmt.Sprintf("EPG删除成功，已解绑 %d 个频道", unbound),
+			Type: "success",
+		}
+	}
 	return dto.ReturnJsonDto{Code: 1, Msg: "EPG删除成功", Type: "success"}
 }
-
 func BindChannel() dto.ReturnJsonDto {
 	// 手动重算绑定：走统一收尾出口（重算绑定 + 作废受影响套餐缓存）。
+	//
+	// ★这个动作是**后台跑的**：RequestChannelRefresh 只是登记一个去抖定时器，
+	// 真正的重算（扫全部频道、重写 bound_names、作废缓存）在定时器里做，
+	// HTTP 这边立刻就返回了。
+	//
+	// 所以提示语不能说"绑定成功"—— 那一刻还什么都没绑上；
+	// 也不能让前端马上刷新表格 —— 刷出来的是重算前的旧名单，
+	// 用户会以为"点了没反应"。这里明确告诉用户后台在跑、稍后刷新看结果。
 	until.RequestChannelRefresh()
-	return dto.ReturnJsonDto{Code: 1, Msg: "绑定成功", Type: "success"}
+	return dto.ReturnJsonDto{Code: 1, Msg: "后台运行中，请稍后刷新查看结果", Type: "success"}
 }
 
 // ClearBind 清空全部 EPG 绑定。
@@ -211,8 +293,9 @@ func BindChannel() dto.ReturnJsonDto {
 // 只清 content 的话，频道的 epg_id 还指着旧 EPG，节目单照旧下发，
 // 用户看到的是"绑定列表空了但节目单还在"——这就是以前的毛病。
 func ClearBind() dto.ReturnJsonDto {
-	// 1) 清 EPG 表里的手动绑定名单。
-	if err := dao.DB.Model(&models.IptvEpg{}).Where("content != ''").Update("content", "").Error; err != nil {
+	// 1) 清 EPG 表里的手动绑定名单 + 自动绑定结果清单。
+	if err := dao.DB.Model(&models.IptvEpg{}).Where("content != '' OR bound_names != ''").
+		Updates(map[string]interface{}{"content": "", "bound_names": ""}).Error; err != nil {
 		return dto.ReturnJsonDto{Code: 0, Msg: "清除绑定失败:" + err.Error(), Type: "danger"}
 	}
 

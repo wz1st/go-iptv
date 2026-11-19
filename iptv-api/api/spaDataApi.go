@@ -37,7 +37,7 @@ func EngineData(c *gin.Context) {
 	if dao.WS.IsOnline() {
 		pageData.Online = 1
 
-		// reloadLic 会让引擎去**远端**（autu.qingh.xyz）重新校验授权，
+		// reloadLic 会让引擎去**远端**（autu.wqhe.cn）重新校验授权，
 		if !dao.LicStillValid() || dao.ReloadLicDue() {
 			res, err := dao.WS.SendWS(dao.Request{Action: "reloadLic"})
 			if err == nil {

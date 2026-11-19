@@ -56,7 +56,7 @@ func MytvReleases(c *gin.Context) {
 func getQingh() string {
 	res := dto.XmlTV{
 		GeneratorName: "清和IPTV管理系统",
-		GeneratorURL:  "https://www.qingh.xyz",
+		GeneratorURL:  "https://www.wqhe.cn",
 	}
 	output, _ := xml.MarshalIndent(res, "", "  ")
 	return string(output)

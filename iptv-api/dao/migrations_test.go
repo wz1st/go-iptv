@@ -493,7 +493,7 @@ func TestMigrateAllBuildsSchemaOnEmptyDB(t *testing.T) {
 		"iptv_category":      {"auto_rename", "source_id", "raw_count"},
 		"iptv_category_list": {"auto_rename", "auto_group", "ku9", "auto_category", "latest_time", "dedup"},
 		"iptv_channels":      {"category_id", "epg_id", "source_id", "sort", "status"},
-		"iptv_epg":           {"from_list", "cas"},
+		"iptv_epg":           {"from_list"},
 		"iptv_epg_list":      {"last_time"},
 		"iptv_meals":         {"name", "content", "status"},
 	}

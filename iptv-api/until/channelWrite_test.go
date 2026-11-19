@@ -556,13 +556,13 @@ func TestRequestChannelRefreshMergesBurst(t *testing.T) {
 	done := make(chan struct{}, 8)
 	channelRefreshClean = func() {}
 	channelRefreshEpg = func([]int64) []int64 { return nil }
-	channelRefreshBind = func() []int64 {
+	channelRefreshBind = func() BindResult {
 		atomic.AddInt64(&rounds, 1)
 		select {
 		case done <- struct{}{}:
 		default:
 		}
-		return nil
+		return BindResult{}
 	}
 
 	// 一轮"自动更新"按 #genre# 拆出几十个分组，每个分组结束时都会请求一次
@@ -604,13 +604,13 @@ func TestRequestChannelRefreshRunsAgainWhenDirty(t *testing.T) {
 	first := make(chan struct{})
 	channelRefreshClean = func() {}
 	channelRefreshEpg = func([]int64) []int64 { return nil }
-	channelRefreshBind = func() []int64 {
+	channelRefreshBind = func() BindResult {
 		n := atomic.AddInt64(&rounds, 1)
 		if n == 1 {
 			close(first)
 			<-release // 卡住第一轮，模拟"全表重绑要跑一会儿"
 		}
-		return nil
+		return BindResult{}
 	}
 
 	RequestChannelRefresh()
@@ -667,11 +667,11 @@ func TestRequestChannelRefreshOrderCleanBindEpg(t *testing.T) {
 		order = append(order, "clean")
 		mu.Unlock()
 	}
-	channelRefreshBind = func() []int64 {
+	channelRefreshBind = func() BindResult {
 		mu.Lock()
 		order = append(order, "bind")
 		mu.Unlock()
-		return nil
+		return BindResult{}
 	}
 	channelRefreshEpg = func([]int64) []int64 {
 		mu.Lock()

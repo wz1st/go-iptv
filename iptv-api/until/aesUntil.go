@@ -49,7 +49,7 @@ const FixedUpdateText = "update"
 // **必须与引擎侧 iptv-engine/dao/configDao.go 里 cfg.Site.Ad 的默认值逐字一致**：
 // 定制授权下这份内容可以在后台改（配置落在 config.yml 的 site.ad），
 // 其余情况（非定制授权、授权失效后被清成 Type 0）一律回落到这个值。
-const FixedAdInfo = "作者博客: www.qingh.xyz"
+const FixedAdInfo = "作者博客: www.wqhe.cn"
 
 // NoApkVersion 是「线上还没有可升级的 apk 包」时对外的版本号占位。
 //
